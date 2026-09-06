@@ -126,3 +126,21 @@ def recover_states(adata, reference, parent_key="NMF_parent", input_layer="count
     for col in result.columns: out.obs[col]=result[col]
 
     return out if copy else result
+
+
+def check_query_compatibility(adata, reference, parent_key="NMF_parent"):
+    """Summarize query compatibility with a NAViECO Layer 1 reference."""
+    import pandas as pd
+
+    if parent_key not in adata.obs: raise KeyError(f"adata.obs does not contain parent_key '{parent_key}'.")
+    query_genes=set(map(str,adata.var_names))
+    rows=[]
+    for parent in pd.unique(adata.obs[parent_key].astype(str)):
+        n_cells=int((adata.obs[parent_key].astype(str)==parent).sum())
+        if parent not in reference:
+            rows.append({"Parent":parent,"n_cells":n_cells,"Supported":False,"n_reference_genes":0,"n_matched_genes":0,"gene_coverage":np.nan})
+            continue
+        ref=reference[parent]
+        n_ref=len(ref.genes); n_match=sum(g in query_genes for g in ref.genes)
+        rows.append({"Parent":parent,"n_cells":n_cells,"Supported":True,"n_reference_genes":n_ref,"n_matched_genes":n_match,"gene_coverage":n_match/n_ref if n_ref else np.nan})
+    return pd.DataFrame(rows)

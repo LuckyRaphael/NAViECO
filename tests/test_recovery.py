@@ -89,3 +89,33 @@ def test_recover_states_partial_parents(tmp_path):
     assert result.loc["c2","UnassignedReason"]=="Filtered_initial_state"
     assert result.loc["c5","State"]=="Unassigned"
     assert result.loc["c5","UnassignedReason"]=="Unsupported_parent"
+
+
+def test_check_query_compatibility(tmp_path):
+    import json
+    import pandas as pd
+    import anndata as ad
+    from navieco.reference import NAViECOReference
+    from navieco.recovery import check_query_compatibility
+
+    root=tmp_path/"ref"; p=root/"parents"/"Treg"; p.mkdir(parents=True)
+    np.save(p/"W.npy",np.ones((6,2)))
+    (p/"genes.txt").write_text("A\nB\nC\n"); (p/"initial_states.txt").write_text("IS01\nIS02\n")
+    pd.DataFrame({"initial_state":["IS01","IS02"],"final_state":["S01","S02"],"retained":[True,True]}).to_csv(p/"state_mapping.csv",index=False)
+    pd.DataFrame({"initial_state":["IS01","IS02"]}).to_csv(p/"state_qc.csv",index=False)
+    (p/"metadata.json").write_text(json.dumps({"parent":"Treg"}))
+    (root/"manifest.json").write_text(json.dumps({"name":"test","version":"test","layer":1,"parents":["Treg"]}))
+
+    a=ad.AnnData(X=np.ones((3,2)))
+    a.var_names=["A","B"]; a.obs["NMF_parent"]=["Treg","Treg","Macrophage"]
+
+    ref=NAViECOReference.from_dir(root)
+    x=check_query_compatibility(a,ref)
+
+    treg=x.loc[x["Parent"]=="Treg"].iloc[0]
+    macro=x.loc[x["Parent"]=="Macrophage"].iloc[0]
+    assert treg["Supported"]
+    assert treg["n_reference_genes"]==3
+    assert treg["n_matched_genes"]==2
+    assert np.isclose(treg["gene_coverage"],2/3)
+    assert not macro["Supported"]
