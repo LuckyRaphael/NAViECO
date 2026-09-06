@@ -49,3 +49,43 @@ def recover_h(V: np.ndarray, W: np.ndarray, H0: np.ndarray | None = None, max_it
         rel_change = np.linalg.norm(H - H_old) / max(np.linalg.norm(H_old), eps)
         if rel_change < tol: break
     return H
+
+
+def recover_parent(X, var_names, reference, input_scale="counts", groups=None, cell_names=None, max_iter=500, tol=1e-6):
+    """Recover NAViECO states for cells belonging to one parent class."""
+    import pandas as pd
+    from .preprocessing import prepare_reference_expression, scale_query, posneg
+
+    E=prepare_reference_expression(X,var_names,reference.genes,input_scale=input_scale)
+    Z=scale_query(E,groups=groups)
+    V=posneg(Z)
+    if V.shape[0]!=reference.W.shape[0]: raise ValueError(f"Query V has {V.shape[0]} rows but reference W has {reference.W.shape[0]}.")
+
+    zero_signal=np.asarray(V.sum(axis=0)==0).ravel()
+    H=recover_h(V,reference.W,max_iter=max_iter,tol=tol)
+    Hsum=H.sum(axis=0,keepdims=True)
+    Hnorm=np.divide(H,Hsum,out=np.zeros_like(H),where=Hsum>0)
+
+    order=np.argsort(Hnorm,axis=0)
+    top=order[-1]
+    top1=Hnorm[top,np.arange(Hnorm.shape[1])]
+    top2=Hnorm[order[-2],np.arange(Hnorm.shape[1])] if Hnorm.shape[0]>1 else np.zeros(Hnorm.shape[1])
+    margin=top1-top2
+    initial=np.asarray(reference.initial_states,dtype=object)[top]
+
+    final=[]; reason=[]
+    for i,state in enumerate(initial):
+        if zero_signal[i]:
+            final.append("Unassigned"); reason.append("Zero_scaled_signal")
+        else:
+            mapped=reference.map_initial_state(str(state))
+            if mapped is None:
+                final.append("Unassigned"); reason.append("Filtered_initial_state")
+            else:
+                final.append(mapped); reason.append(None)
+
+    if cell_names is None: cell_names=[str(i) for i in range(len(initial))]
+    if len(cell_names)!=len(initial): raise ValueError("Length of cell_names does not match number of cells.")
+
+    assignments=pd.DataFrame({"InitialState":initial,"State":final,"RecoveryTop1":top1,"RecoveryMargin":margin,"UnassignedReason":reason},index=pd.Index(cell_names,name="cell"))
+    return assignments,Hnorm

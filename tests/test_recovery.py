@@ -28,3 +28,32 @@ def test_recover_h_recovers_dominant_state():
     V = W @ H_true
     H = recover_h(V, W, max_iter=1000, tol=1e-8)
     assert np.array_equal(np.argmax(H, axis=0), np.argmax(H_true, axis=0))
+
+
+def test_recover_parent_end_to_end(tmp_path):
+    import json
+    import pandas as pd
+    from navieco.reference import ParentReference
+    from navieco.recovery import recover_parent
+
+    p=tmp_path/"Treg"; p.mkdir()
+    genes=["A","B"]
+    W=np.array([[1.0,0.05],[0.05,1.0],[0.05,1.0],[1.0,0.05]],dtype=float)
+    np.save(p/"W.npy",W)
+    (p/"genes.txt").write_text("A\nB\n")
+    (p/"initial_states.txt").write_text("IS01\nIS02\n")
+    pd.DataFrame({"initial_state":["IS01","IS02"],"final_state":["S01",np.nan],"retained":[True,False]}).to_csv(p/"state_mapping.csv",index=False)
+    pd.DataFrame({"initial_state":["IS01","IS02"],"marker_count":[20,5],"AFI":[0.2,1.2]}).to_csv(p/"state_qc.csv",index=False)
+    (p/"metadata.json").write_text(json.dumps({"parent":"Treg"}))
+
+    ref=ParentReference.from_dir(p)
+    X=np.array([[90,10],[10,90],[80,20],[20,80]],dtype=float)
+    result,H=recover_parent(X,["A","B"],ref,input_scale="counts",cell_names=["c1","c2","c3","c4"])
+
+    assert H.shape==(2,4)
+    assert np.allclose(H.sum(axis=0),1)
+    assert result.loc["c1","InitialState"]=="IS01"
+    assert result.loc["c1","State"]=="S01"
+    assert result.loc["c2","InitialState"]=="IS02"
+    assert result.loc["c2","State"]=="Unassigned"
+    assert result.loc["c2","UnassignedReason"]=="Filtered_initial_state"
