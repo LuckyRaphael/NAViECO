@@ -3,10 +3,18 @@ NAViECO
 =======
 
 Navigating longitudinal immunotherapy ecosystems.
-
-NAViECO provides computational tools for reference-based recovery of
-transcriptional cell states and multicellular ecosystems in cancer
-immunotherapy datasets.
 """
 
+from .reference import (
+    NAViECOReference,
+    ParentReference,
+    load_reference,
+)
+
 __version__ = "0.1.0a1"
+
+__all__ = [
+    "NAViECOReference",
+    "ParentReference",
+    "load_reference",
+]
