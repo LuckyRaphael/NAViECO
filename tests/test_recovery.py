@@ -57,3 +57,35 @@ def test_recover_parent_end_to_end(tmp_path):
     assert result.loc["c2","InitialState"]=="IS02"
     assert result.loc["c2","State"]=="Unassigned"
     assert result.loc["c2","UnassignedReason"]=="Filtered_initial_state"
+
+
+def test_recover_states_partial_parents(tmp_path):
+    import json
+    import pandas as pd
+    import anndata as ad
+    from navieco.reference import NAViECOReference
+    from navieco.recovery import recover_states
+
+    root=tmp_path/"ref"; p=root/"parents"/"Treg"; p.mkdir(parents=True)
+    np.save(p/"W.npy",np.array([[1,.05],[.05,1],[.05,1],[1,.05]],dtype=float))
+    (p/"genes.txt").write_text("A\nB\n"); (p/"initial_states.txt").write_text("IS01\nIS02\n")
+    pd.DataFrame({"initial_state":["IS01","IS02"],"final_state":["S01",np.nan],"retained":[True,False]}).to_csv(p/"state_mapping.csv",index=False)
+    pd.DataFrame({"initial_state":["IS01","IS02"],"marker_count":[20,5],"AFI":[.2,1.2]}).to_csv(p/"state_qc.csv",index=False)
+    (p/"metadata.json").write_text(json.dumps({"parent":"Treg"}))
+    (root/"manifest.json").write_text(json.dumps({"name":"test","version":"test","layer":1,"parents":["Treg"]}))
+
+    X=np.array([[90,10],[10,90],[80,20],[20,80],[5,5]],dtype=float)
+    a=ad.AnnData(X=X)
+    a.var_names=["A","B"]; a.obs_names=["c1","c2","c3","c4","c5"]
+    a.layers["counts"]=X.copy()
+    a.obs["NMF_parent"]=["Treg","Treg","Treg","Treg","Macrophage"]
+
+    ref=NAViECOReference.from_dir(root)
+    result=recover_states(a,ref,parent_key="NMF_parent",input_layer="counts",input_scale="counts")
+
+    assert result.index.tolist()==a.obs_names.tolist()
+    assert result.loc["c1","State"]=="S01"
+    assert result.loc["c2","State"]=="Unassigned"
+    assert result.loc["c2","UnassignedReason"]=="Filtered_initial_state"
+    assert result.loc["c5","State"]=="Unassigned"
+    assert result.loc["c5","UnassignedReason"]=="Unsupported_parent"

@@ -89,3 +89,40 @@ def recover_parent(X, var_names, reference, input_scale="counts", groups=None, c
 
     assignments=pd.DataFrame({"InitialState":initial,"State":final,"RecoveryTop1":top1,"RecoveryMargin":margin,"UnassignedReason":reason},index=pd.Index(cell_names,name="cell"))
     return assignments,Hnorm
+
+
+def recover_states(adata, reference, parent_key="NMF_parent", input_layer="counts", input_scale="counts", scale_group_keys=None, copy=False, max_iter=500, tol=1e-6):
+    """Recover Layer 1 states for all supported parent classes in an AnnData object."""
+    import pandas as pd
+
+    if parent_key not in adata.obs: raise KeyError(f"adata.obs does not contain parent_key '{parent_key}'.")
+    if input_layer is None:
+        X=adata.X
+    else:
+        if input_layer not in adata.layers: raise KeyError(f"adata.layers does not contain '{input_layer}'.")
+        X=adata.layers[input_layer]
+
+    out=adata.copy() if copy else adata
+    result=pd.DataFrame(index=adata.obs_names,columns=["InitialState","State","RecoveryTop1","RecoveryMargin","UnassignedReason"],dtype=object)
+    result["State"]="Unassigned"; result["UnassignedReason"]="Unsupported_parent"
+
+    parents=adata.obs[parent_key].astype(str)
+    supported=reference.available_parents(pd.unique(parents))
+
+    for parent in supported:
+        idx=np.flatnonzero(parents.to_numpy()==parent)
+        groups=None
+        if scale_group_keys:
+            missing=[k for k in scale_group_keys if k not in adata.obs]
+            if missing: raise KeyError(f"adata.obs is missing scale-group columns: {missing}")
+            groups=adata.obs.iloc[idx][list(scale_group_keys)].astype(str).agg("|||".join,axis=1).to_numpy()
+
+        Xi=X[idx]
+        assignment,_=recover_parent(Xi,adata.var_names,reference[parent],input_scale=input_scale,groups=groups,cell_names=adata.obs_names[idx],max_iter=max_iter,tol=tol)
+        result.loc[assignment.index,assignment.columns]=assignment
+
+    result["RecoveryTop1"]=pd.to_numeric(result["RecoveryTop1"],errors="coerce")
+    result["RecoveryMargin"]=pd.to_numeric(result["RecoveryMargin"],errors="coerce")
+    for col in result.columns: out.obs[col]=result[col]
+
+    return out if copy else result
