@@ -1,15 +1,15 @@
 # NAViECO
 
-**NAViECO — navigating longitudinal immunotherapy ecosystems**
+**NAViECO — navigating immune ecosystems**
 
-NAViECO is a computational framework for the discovery and recovery of
-cell states and multicellular ecosystems in cancer immunotherapy.
+NAViECO is a computational framework for the concord-based semi-supervised annotation and 
+recovery of cell states and multicellular co-covariated ecosystems in cancer immunotherapy.
 
 ## Development status
 
 NAViECO is currently under active development.
 
-Version `0.1.0a1` focuses on Layer 1 reference-based recovery of
+Version `0.1.0a1` focuses on cell type annotation and Layer 1 reference-based recovery of
 transcriptional cell states from single-cell RNA-seq data.
 
 Future versions will extend NAViECO to multicellular modules and
@@ -31,4 +31,4 @@ Layer 3: Ecosystem architecture
 
 Working title:
 
-*A longitudinal pan-cancer immunotherapy atlas reveals multicellular ecosystem remodeling*
+*Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers*
