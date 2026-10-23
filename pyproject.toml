@@ -5,15 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "navieco"
 version = "0.1.0a1"
-description = "NAViECO: navigating longitudinal immunotherapy ecosystems"
+description = "NAViECO: Navigating Immune Ecosystems"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "numpy>=1.23",
-    "pandas>=1.5",
-    "scipy>=1.9",
-    "anndata>=0.9"
-]
+dependencies = []
 
 authors = [
     {name = "Jianpeng Zhang"}
@@ -22,9 +17,8 @@ authors = [
 keywords = [
     "single-cell",
     "scRNA-seq",
+    "CONCORD",
     "immunotherapy",
-    "immune-checkpoint-blockade",
-    "tumor-microenvironment",
     "cell-state",
     "multicellular-ecosystem"
 ]
