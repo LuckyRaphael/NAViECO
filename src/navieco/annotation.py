@@ -15,6 +15,10 @@ from .joint import build_joint
 from .concord_engine import run_concord
 from .hierarchy import combine_stage_predictions
 from .qc import validate_annotation
+from .embedding import compute_query_umap
+from .progress import log_progress
+from .config import resolve_advanced
+from time import perf_counter
 
 
 def _training_record(joint, model, level, parent=""):
@@ -71,12 +75,12 @@ def _extract_predictions(joint, cell_ids):
         raise RuntimeError("CONCORD predicted labels disagree with classifier probabilities.")
 
     latent = np.asarray(joint.obsm["Concord"])[rows].copy()
-    if latent.shape != (len(ids), 300) or not np.isfinite(latent).all():
+    if latent.ndim != 2 or latent.shape[0] != len(ids) or latent.shape[1] < 1 or not np.isfinite(latent).all():
         raise RuntimeError("CONCORD returned an invalid latent representation.")
     return probabilities, latent
 
 
-def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None, device="auto"):
+def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None, device="auto", advanced=None, batch_key=None, run_umap=False, verbose=True, batch_size=128):
     """Annotate Query cells with stage-specific Reference and Query HVGs.
 
     Coarse trains Stage A to predict Level2. Fine trains Stage A followed by
@@ -84,17 +88,58 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
     uncalibrated; fine predictions follow hard Level2 routing. The original
     Query expression matrix is preserved in the returned AnnData.
     """
+    # Resolve only settings active for the requested hierarchy level.
+    cfg = resolve_advanced(level, advanced)
+    latent_dim_coarse = cfg["latent_dim_coarse"]
+    n_epochs_coarse = cfg["n_epochs_coarse"]
+    latent_dim_fine = cfg.get("latent_dim_fine")
+    n_epochs_fine = cfg.get("n_epochs_fine")
+    seed = cfg["seed"]
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 2:
+        raise ValueError("batch_size must be an integer >= 2.")
+
     if level not in {"coarse", "fine"}:
         raise ValueError("level must be 'coarse' or 'fine'.")
     if not isinstance(data, (ad.AnnData, str, Path)):
         raise TypeError("data must be an AnnData object or an .h5ad path.")
 
+    started = perf_counter()
+    log_progress("Starting Layer0 annotation", verbose)
     query = data if isinstance(data, ad.AnnData) else ad.read_h5ad(data)
+    log_progress(f"Query loaded | cells={query.n_obs:,}, genes={query.n_vars:,}", verbose)
     if not query.obs_names.is_unique:
         raise ValueError("Query cell IDs must be unique.")
 
+    if batch_key is not None:
+        if not isinstance(batch_key, str) or not batch_key.strip():
+            raise ValueError("batch_key must be a nonempty column name or None.")
+        if batch_key not in query.obs.columns:
+            raise KeyError(f"Query batch column not found: {batch_key}")
+        values = query.obs[batch_key].astype("string").str.strip()
+        if (values.isna() | values.eq("").fillna(True)).any():
+            raise ValueError(f"Query batch column contains missing values: {batch_key}")
+
+    if not isinstance(run_umap, bool):
+        raise TypeError("run_umap must be True or False.")
+    if run_umap and query.n_obs < 4:
+        raise ValueError("run_umap=True requires at least four Query cells.")
+
     training_device = ("cuda" if torch.cuda.is_available() else "cpu") if device == "auto" else device
+    selected_key = batch_key if batch_key is not None else (
+        "Dataset" if "Dataset" in query.obs else None
+    )
+    if selected_key:
+        counts = query.obs[selected_key].astype(str).value_counts()
+        log_progress(f"Query batches | key={selected_key}, domains={len(counts)}", verbose)
+        for name, count in counts.head(12).items():
+            log_progress(f"  {name}: {count:,} cells", verbose)
+        if len(counts) > 12:
+            log_progress(f"  plus {len(counts)-12} more domains", verbose)
+    else:
+        log_progress("Query batches | one input domain (no batch key)", verbose)
+    log_progress(f"Loading Reference | {reference}", verbose)
     ref, _ = load_reference(reference, backed=True)
+    log_progress(f"Reference loaded | cells={ref.n_obs:,}, genes={ref.n_vars:,}", verbose)
 
     try:
         # During candidate development, HVG files live beside the Reference
@@ -119,7 +164,15 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
 
         # Normalize full input counts, harmonize symbols, then apply the same
         # versioned blacklist used for Reference feature selection.
+        log_progress("Preprocessing | normalization, gene harmonization, filtering", verbose)
         prepared = prepare_query(query, ref)
+        info = prepared.uns.get("navieco_preprocessing", {})
+        log_progress(
+            f"Preprocessing done | shared_genes={prepared.n_vars:,}, "
+            f"exact={info.get('exact_matches', 'NA')}, "
+            f"rescued={info.get('rescued_genes', 'NA')}, "
+            f"dropped={info.get('dropped_genes', 'NA')}", verbose
+        )
         taxonomy = ref.obs[["Lineage", "Celltype_level2", "Celltype_level3"]].astype(str).drop_duplicates()
         parent_table = taxonomy[["Celltype_level2", "Lineage"]].drop_duplicates().set_index("Celltype_level2")
         state_table = taxonomy[["Celltype_level3", "Celltype_level2"]].drop_duplicates().set_index("Celltype_level3")
@@ -132,9 +185,21 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             workdir = Path(workdir)
 
             # Stage A: independent global Query HVGs union frozen Level2 HVGs.
-            joint = build_joint(ref, prepared, n_hvg=n_hvg, level="coarse", stage="A", hvg_dir=hvg_dir)
-            joint, model = run_concord(joint, save_dir=workdir / "stageA", device=training_device, verbose=False)
+            log_progress("Stage A | building joint dataset and selecting HVGs", verbose)
+            joint = build_joint(ref, prepared, n_hvg=n_hvg, level="coarse", stage="A", hvg_dir=hvg_dir, batch_key=batch_key)
+            log_progress(
+                f"Stage A | cells={joint.n_obs:,}, features={joint.n_vars:,}, "
+                f"domains={joint.obs['navieco_domain'].nunique()}", verbose
+            )
+            joint, model = run_concord(
+                joint, save_dir=workdir / "stageA", device=training_device,
+                latent_dim=latent_dim_coarse, verbose=verbose, stage_name="Level2", n_epochs=n_epochs_coarse, seed=seed, batch_size=batch_size
+            )
             p2, latent = _extract_predictions(joint, query.obs_names)
+            log_progress(
+                f"Stage A done | Level2 classes={len(p2.columns)}, latent={latent.shape[1]}",
+                verbose
+            )
             training_records.append(_training_record(joint, model, "Level2"))
             del joint, model
 
@@ -150,25 +215,34 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
                 for parent in predicted_parents.unique():
                     children = state_table.index[state_table["Celltype_level2"].eq(parent)]
                     if len(children) == 1:
+                        log_progress(f"Stage B | {parent}: single child, no training", verbose)
                         continue
 
                     ids = predicted_parents.index[predicted_parents.eq(parent)]
+                    log_progress(
+                        f"Stage B | {parent}: query={len(ids):,}, child_types={len(children)}", verbose
+                    )
                     subset = prepared[ids, :].copy()
                     branch = build_joint(
                         ref, subset, n_hvg=n_hvg, level="fine",
-                        stage="B", parent=parent, hvg_dir=hvg_dir
+                        stage="B", parent=parent, hvg_dir=hvg_dir, batch_key=batch_key
+                    )
+                    log_progress(
+                        f"Stage B | {parent}: cells={branch.n_obs:,}, features={branch.n_vars:,}", verbose
                     )
                     branch, model = run_concord(
                         branch, save_dir=workdir / "stageB" / str(len(stageB)),
-                        device=training_device, verbose=False
+                        device=training_device, latent_dim=latent_dim_fine, verbose=verbose, stage_name=f"Level3:{parent}", n_epochs=n_epochs_fine, seed=seed, batch_size=batch_size
                     )
                     probabilities, _ = _extract_predictions(branch, ids)
                     if set(probabilities.columns) != set(children):
                         raise RuntimeError(f"Stage B classes disagree with Reference: {parent}")
                     stageB[parent] = probabilities
+                    log_progress(f"Stage B | {parent}: completed {len(probabilities):,} query cells", verbose)
                     training_records.append(_training_record(branch, model, "Level3", parent))
                     del branch, model, subset
 
+        log_progress("Combining hierarchical labels and probabilities", verbose)
         # Remove previous annotation fields when reannotating a Query.
         result = query.copy()
         old_columns = {"navieco_label", "navieco_confidence"}
@@ -212,6 +286,38 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             metadata["stageB_routing"] = "predicted_Level2_only"
             metadata["stageB_models_run"] = len(stageB)
 
+        metadata["latent_dim_coarse"] = latent_dim_coarse
+        if level == "fine":
+            metadata["latent_dim_fine"] = latent_dim_fine
+        selected_key = batch_key if batch_key is not None else (
+            "Dataset" if "Dataset" in query.obs.columns else "single_domain"
+        )
+        metadata["query_batch_key"] = selected_key
+        metadata["query_batches"] = (
+            int(query.obs[selected_key].nunique()) if selected_key != "single_domain" else 1
+        )
+        # Remove potentially stale NAViECO coordinates from previous runs.
+        if "X_navieco_umap" in result.obsm:
+            del result.obsm["X_navieco_umap"]
+
+        # UMAP is calculated solely on Query Stage A CONCORD coordinates.
+        if run_umap:
+            log_progress(f"Query UMAP | starting from {result.obsm['X_navieco'].shape[1]}D latent", verbose)
+            compute_query_umap(result)
+            log_progress(f"Query UMAP | completed for {result.n_obs:,} cells", verbose)
+
+        metadata["umap_computed"] = run_umap
+        if run_umap:
+            metadata["umap_basis"] = "X_navieco"
+            metadata["umap_subset"] = "query_only"
+            metadata["umap_neighbors"] = min(15, result.n_obs - 1)
+            metadata["umap_min_dist"] = 0.3
+
+        metadata["n_epochs_coarse"] = n_epochs_coarse
+        metadata["seed"] = seed
+        metadata["batch_size"] = batch_size
+        if level == "fine":
+            metadata["n_epochs_fine"] = n_epochs_fine
         result.uns["navieco"] = metadata
 
         # H5AD-safe model IDs; parent names are stored as values, never keys.
@@ -221,9 +327,16 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
         }
 
         # All integrity checks must pass before writing the output file.
+        log_progress("Annotation QC | checking output", verbose)
+        from .palette import attach_annotation_colors
+        attach_annotation_colors(result, ref.obs)
         validate_annotation(result)
+        log_progress("Annotation QC | PASSED", verbose)
         if output is not None:
+            log_progress(f"Saving H5AD | {output}", verbose)
             result.write_h5ad(output)
+            log_progress("Saving H5AD | completed", verbose)
+        log_progress(f"Layer0 completed | elapsed={perf_counter()-started:.1f}s", verbose)
         return result
     finally:
         ref.file.close()

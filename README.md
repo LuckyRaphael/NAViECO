@@ -137,3 +137,28 @@ Planned calculation of scores for selected dynamics-associated indicators identi
 Layer 0 has passed internal functional tests, reference integrity checks, and a small-scale CONCORD training-history integration test.
 
 Full-reference independent real-query validation and biological accuracy benchmarking remain pending. Layers 1–4 are planned and are not included in this release.
+
+
+### Built-in categorical palette (OmicVerse-origin)
+
+NAViECO embeds static hexadecimal color values from [OmicVerse's palette
+module](https://github.com/omicverse/omicverse/blob/master/omicverse/pl/_palette.py)
+(source: GPL-3.0). It **does not import or require OmicVerse** at runtime.
+The default ordering begins with OmicVerse `sc_color` (28 colors), then its
+high-cardinality `palette_112` and named color-family palettes. Duplicate
+hex values are removed; if more colors are needed, distinct nearby hues/shades
+are generated deterministically. HEX values are guaranteed **not to repeat**
+within one palette or across the generated Level1/2/3 mapping. This is exact
+uniqueness, not a guarantee that all large-N colors are perceptually different.
+
+```python
+import navieco as nv
+colors_129 = nv.get_palette(129)    # returns 129 unique hex colors
+# After nv.annotate(...), stable mapping keyed by annotation level and cell type:
+# adata.uns['navieco_color_mapping']['navieco_level3']
+# adata.uns['navieco_level3_colors']  # Scanpy-compatible observed categories
+```
+
+The full Reference taxonomy determines color assignment to keep the same cell
+label colored consistently across independent Query datasets. Existing labels
+and expression values are not changed by attaching the palette.

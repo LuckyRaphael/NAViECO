@@ -12,7 +12,33 @@ from scipy import sparse
 from .gene_filter import excluded_genes, keep_gene_mask
 
 
-def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, parent=None, hvg_dir=None, min_query_hvg_cells=30):
+
+
+def _query_domains(query, batch_key=None):
+    """Select and validate Query domains without modifying original metadata."""
+    if batch_key is not None and (not isinstance(batch_key, str) or not batch_key.strip()):
+        raise ValueError("batch_key must be a nonempty column name or None.")
+
+    key = batch_key if batch_key is not None else (
+        "Dataset" if "Dataset" in query.obs.columns else None
+    )
+
+    if key is None:
+        return pd.Series("input", index=query.obs_names, dtype=str), "single_domain"
+
+    if key not in query.obs.columns:
+        raise KeyError(f"Query batch column not found: {key}")
+
+    values = query.obs[key].astype("string").str.strip()
+    invalid = values.isna() | values.eq("").fillna(True)
+    if invalid.any():
+        raise ValueError(
+            f"Query batch column '{key}' contains {int(invalid.sum())} missing or empty values."
+        )
+
+    return values.astype(str), key
+
+def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, parent=None, hvg_dir=None, min_query_hvg_cells=30, batch_key=None):
     """Construct joint CONCORD data from frozen Reference and independent Query HVGs.
 
     Stage A predicts Level2 globally; Stage B predicts Level3 within one Level2.
@@ -106,7 +132,7 @@ def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, paren
     # Keep training labels and domain identities separate from user metadata.
     ref_labels = ref.obs[label_col].astype(str).to_numpy()
     ref_domains = ("reference:" + ref.obs["Dataset"].astype(str)).to_numpy()
-    qry_domains = qry.obs["Dataset"].astype(str) if "Dataset" in qry.obs else pd.Series("input", index=qry.obs_names)
+    qry_domains, selected_batch_key = _query_domains(qry, batch_key)
     qry_domains = ("query:" + qry_domains).to_numpy()
     ref.obs = pd.DataFrame({"navieco_label": ref_labels, "navieco_domain": ref_domains}, index=ref.obs_names)
     qry.obs = pd.DataFrame({"navieco_label": "unlabeled", "navieco_domain": qry_domains}, index=qry.obs_names)
@@ -134,4 +160,6 @@ def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, paren
     }
     if parent is not None:
         joint.uns["navieco_joint"]["parent"] = parent
+    joint.uns["navieco_joint"]["query_batch_key"] = selected_batch_key
+    joint.uns["navieco_joint"]["query_batches"] = int(pd.Index(qry_domains).nunique())
     return joint
