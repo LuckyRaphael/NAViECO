@@ -17,6 +17,34 @@ from .hierarchy import combine_stage_predictions
 from .qc import validate_annotation
 
 
+def _training_record(joint, model, level, parent=""):
+    """Preserve training information before temporary models are removed."""
+    history = getattr(model, "navieco_history", [])
+    if not history:
+        raise RuntimeError("CONCORD training history is missing.")
+
+    matrix = np.asarray([
+        [r["epoch"], r["train_loss"], r["val_loss"]]
+        for r in history
+    ], dtype=np.float64)
+
+    ref_mask = joint.obs["navieco_origin"].astype(str).eq("reference")
+    query_mask = joint.obs["navieco_origin"].astype(str).eq("query")
+
+    return {
+        "level": str(level),
+        "parent": str(parent),
+        "reference_cells": int(ref_mask.sum()),
+        "query_cells": int(query_mask.sum()),
+        "features": int(joint.n_vars),
+        "classes": int(joint.obs.loc[ref_mask, "navieco_label"].nunique()),
+        "epochs_requested": int(model.config.n_epochs),
+        "epochs_completed": int(len(history)),
+        "history_columns": ["epoch", "train_loss", "val_loss"],
+        "history": matrix
+    }
+
+
 def _extract_predictions(joint, cell_ids):
     """Extract named Query probabilities and embeddings in original cell order."""
     ids = pd.Index(cell_ids)
@@ -98,6 +126,8 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
         if not parent_table.index.is_unique or not state_table.index.is_unique:
             raise RuntimeError("Ambiguous hierarchy in NAViECO Reference.")
 
+        training_records = []
+
         with TemporaryDirectory(prefix="navieco_layer0_") as workdir:
             workdir = Path(workdir)
 
@@ -105,6 +135,7 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             joint = build_joint(ref, prepared, n_hvg=n_hvg, level="coarse", stage="A", hvg_dir=hvg_dir)
             joint, model = run_concord(joint, save_dir=workdir / "stageA", device=training_device, verbose=False)
             p2, latent = _extract_predictions(joint, query.obs_names)
+            training_records.append(_training_record(joint, model, "Level2"))
             del joint, model
 
             if set(p2.columns) != set(parent_table.index):
@@ -135,6 +166,7 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
                     if set(probabilities.columns) != set(children):
                         raise RuntimeError(f"Stage B classes disagree with Reference: {parent}")
                     stageB[parent] = probabilities
+                    training_records.append(_training_record(branch, model, "Level3", parent))
                     del branch, model, subset
 
         # Remove previous annotation fields when reannotating a Query.
@@ -181,6 +213,12 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             metadata["stageB_models_run"] = len(stageB)
 
         result.uns["navieco"] = metadata
+
+        # H5AD-safe model IDs; parent names are stored as values, never keys.
+        result.uns["navieco_training"] = {
+            f"model_{i:03d}": record
+            for i, record in enumerate(training_records)
+        }
 
         # All integrity checks must pass before writing the output file.
         validate_annotation(result)

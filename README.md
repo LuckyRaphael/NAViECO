@@ -2,55 +2,127 @@
 
 **NAViECO — Navigating Immune Ecosystems**
 
-NAViECO is a computational framework for characterizing cellular diversity and multicellular coordination in cancer immunotherapy. Its first implemented component, Layer 0, provides reference-guided hierarchical cell-type annotation of single-cell RNA-seq data.
+NAViECO is a computational framework for reference-guided cell-type annotation, transcriptional cell-state recovery, and multicellular ecosystem analysis in cancer immunotherapy.
+
+The initial release implements **Layer 0**, a CONCORD-based framework for hierarchical cell-type annotation of single-cell RNA-seq data.
+
+## Installation
+
+**Requirements**
+
+- Python >=3.10 (Python 3.11 recommended and tested)
+- `concord-sc==1.0.13`
+- `torch>=2.2,<3`
+- `scanpy>=1.11,<2`
+- `anndata>=0.12,<1`
+- `numpy>=1.26,<3`
+- `pandas>=2,<3`
+- `scipy>=1.11,<2`
+- `matplotlib>=3.6,<4`
+
+The complete dependency specification is maintained in `pyproject.toml`.
+
+Install NAViECO from GitHub:
+
+```bash
+git clone https://github.com/LuckyRaphael/NAViECO.git
+cd NAViECO
+python -m pip install -e .
+```
+
+The NAViECO reference is distributed separately and is not included in this repository. Configure an accessible reference directory:
+
+```bash
+export NAVIECO_REFERENCE_DIR=/path/to/NAViECO_reference
+```
+
+The reference must include the seed-cell data and associated HVG resources. The `hvg_v2` directory may be located inside the reference directory or in the supported sibling `NAViECO_v1_release` directory.
 
 ## Layer 0 | Hierarchical cell-type annotation
 
-NAViECO uses CONCORD for coarse-to-fine, semi-supervised cell-type annotation through three main steps:
+NAViECO performs reference-guided, coarse-to-fine cell-type annotation through four steps.
 
-**1. Gene harmonization and feature selection**
+**1. Query preprocessing**
 
-Query gene identifiers are harmonized with the Reference, and excluded genes are filtered. Precomputed Reference HVGs are combined with independently selected Query HVGs at each annotation resolution, retaining shared measured genes.
+Raw counts are normalized, gene identifiers are harmonized with the Reference, and excluded genes are filtered.
 
-**2. Reference-guided annotation**
+**2. Hierarchical feature selection**
 
-CONCORD jointly learns from labeled Reference cells and unlabeled Query cells to identify 23 Level 2 cell types belonging to 5 major cell lineages.
+Query HVGs are selected independently and combined with predefined Reference HVGs, retaining available shared genes. Global HVGs support broad annotation, while parent-specific HVGs support fine annotation.
 
-**3. Hierarchical refinement**
+**3. Broad cell-type annotation**
 
-Query cells are further classified within their predicted Level 2 cell types using parent-specific CONCORD models, yielding Level 3 annotations across a reference taxonomy of 129 cell types.
+CONCORD jointly learns from labeled Reference cells and unlabeled Query cells, assigning 23 Level 2 cell types across 5 major Level 1 lineages.
 
-All annotation levels represent **cell types**, rather than inferred transcriptional cell states.
+**4. Fine cell-type annotation**
 
-## Reference
+Query cells are assigned to their predicted Level 2 types and refined using parent-specific CONCORD models, producing Level 3 annotations across a reference taxonomy of 129 cell types.
 
-NAViECO v1 includes 68,064 curated reference cells, organized into 5 lineages, 23 Level 2 cell types, and 129 Level 3 cell types, together with global and parent-specific HVG sets.
+All Layer 0 labels represent **cell types**, not inferred transcriptional cell states.
 
-The Reference is distributed separately from the GitHub source code.
-
-## Quick start
+### Usage
 
 ```python
 import navieco as nv
 
+# Hierarchical cell-type annotation
 adata = nv.annotate(
     "query.h5ad",
+    reference="NAViECO_v1",
     level="fine",
-    output="query_annotated.h5ad"
+    output="query_NAViECO.h5ad"
+)
+
+# Training summary
+training = nv.training_summary(adata)
+print(training)
+
+# Compact training loss visualization
+nv.pl.training_report(
+    adata,
+    save="NAViECO_training.pdf",
+    show=False
+)
+
+# Cell-type annotation summary and visualization
+celltypes = nv.pl.annotation_report(
+    adata,
+    save="NAViECO_annotation.pdf",
+    show=False
 )
 ```
 
-Input data require raw counts in `.X` or `.layers["counts"]`. Set `NAVIECO_REFERENCE_DIR` to an accessible NAViECO reference directory before running annotation.
+Use `level="coarse"` for Level 1–2 annotations or `level="fine"` for the full Level 1–3 hierarchy.
 
-Use `level="coarse"` for Level 1–2 annotations or `level="fine"` for Level 1–3 annotations. The original Query expression matrix is preserved.
+Input AnnData must contain raw counts in `.layers["counts"]` or `.X`. The original Query expression matrix is preserved.
 
-## Framework roadmap
+### Training and annotation outputs
 
-- **Layer 0 — Cell-type annotation:** Hierarchical CONCORD-based annotation (implemented).
-- **Layer 1 — Cell-state recovery:** Recovery of reference-defined transcriptional programs.
-- **Layer 2 — Multicellular coordination:** Identification of coordinated cellular components.
-- **Layer 3 — Ecosystem architecture:** Reconstruction of multicellular relationships.
-- **Layer 4 — Longitudinal dynamics:** Characterization of ecosystem changes during treatment.
+NAViECO records hierarchical cell-type labels, classifier confidence scores, global CONCORD embeddings, and per-model training statistics.
+
+`nv.training_summary()` reports the number of Reference and Query cells, features, classes, completed epochs, and observed training and validation losses.
+
+`nv.pl.training_report()` generates compact loss curves using actual recorded training history. For multiple models, the PDF contains separate small-format pages.
+
+`nv.pl.annotation_report()` summarizes predicted cell-type frequencies and classifier confidence distributions.
+
+Classifier confidence and training loss are not measures of independent biological annotation accuracy.
+
+## Layer 1 | Cell-state recovery
+
+Planned reference-guided recovery of transcriptional cell states within annotated cell types.
+
+## Layer 2 | Multicellular coordination
+
+Planned identification of coordinated cellular components based on recovered cell states and their cross-sample relationships.
+
+## Layer 3 | Ecosystem architecture
+
+Planned characterization of multicellular network relationships and ecosystem organization.
+
+## Layer 4 | Dynamics-associated scoring
+
+Planned calculation of scores for selected dynamics-associated indicators identified through longitudinal analyses, supporting prediction of immune checkpoint blockade response.
 
 ## Manuscript
 
@@ -60,6 +132,8 @@ Use `level="coarse"` for Level 1–2 annotations or `level="fine"` for Level 1�
 
 ## Development status
 
-**v0.1.0a1 — Layer 0 development release.**
+**Version 0.1.0a1 — Layer 0 development release**
 
-The annotation workflow has passed internal functional tests. Independent real-dataset validation and biological accuracy benchmarking remain pending.
+Layer 0 has passed internal functional tests, reference integrity checks, and a small-scale CONCORD training-history integration test.
+
+Full-reference independent real-query validation and biological accuracy benchmarking remain pending. Layers 1–4 are planned and are not included in this release.

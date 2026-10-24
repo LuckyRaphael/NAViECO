@@ -5,6 +5,41 @@ import concord as ccd
 import torch
 
 
+class _TrackedConcord(ccd.Concord):
+    """Record real epoch losses without modifying CONCORD optimization."""
+
+    def __init__(self, *args, **kwargs):
+        self.navieco_history = []
+        super().__init__(*args, **kwargs)
+
+    def init_trainer(self):
+        # CONCORD constructs its Trainer inside train(), so instrument it
+        # immediately after construction and before training begins.
+        super().init_trainer()
+
+        train_original = self.trainer.train_epoch
+        val_original = self.trainer.validate_epoch
+
+        def train_record(epoch, dataloader):
+            loss = train_original(epoch, dataloader)
+            self.navieco_history.append({
+                "epoch": int(epoch) + 1,
+                "train_loss": float(loss),
+                "val_loss": float("nan")
+            })
+            return loss
+
+        def val_record(epoch, dataloader):
+            loss = val_original(epoch, dataloader)
+            if not self.navieco_history:
+                raise RuntimeError("Validation occurred before training.")
+            self.navieco_history[-1]["val_loss"] = float(loss)
+            return loss
+
+        self.trainer.train_epoch = train_record
+        self.trainer.validate_epoch = val_record
+
+
 def run_concord(joint, save_dir, device="cpu", n_epochs=15, seed=42, verbose=True):
     """Train CONCORD on labeled Reference cells and unlabeled Query cells.
 
@@ -42,7 +77,7 @@ def run_concord(joint, save_dir, device="cpu", n_epochs=15, seed=42, verbose=Tru
 
     # Preserve the HVG union and curated labels established by earlier modules.
     # Sparse loading avoids unnecessary dense preloading of large joint matrices.
-    model = ccd.Concord(
+    model = _TrackedConcord(
         adata=joint, save_dir=str(save_dir), input_feature=joint.var_names.tolist(),
         class_key="navieco_label", domain_key="navieco_domain",
         unlabeled_class="unlabeled", use_classifier=True,
