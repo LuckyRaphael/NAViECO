@@ -38,3 +38,10 @@ htmlcov/
 data/
 references/
 output/
+!/src/navieco/data/
+!/src/navieco/data/human_gene_db.tsv.gz
+!/src/navieco/data/NAViECO_v1_exclude_CANDIDATE.txt
+
+/logs/
+
+/NAViECO_validation/

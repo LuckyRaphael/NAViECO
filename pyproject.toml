@@ -8,7 +8,16 @@ version = "0.1.0a1"
 description = "NAViECO: Navigating Immune Ecosystems"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "anndata>=0.12,<1",
+    "scanpy>=1.11,<2",
+    "numpy>=1.26,<3",
+    "pandas>=2,<3",
+    "scipy>=1.11,<2",
+    "torch>=2.2,<3",
+    "concord-sc==1.0.13",
+    "matplotlib>=3.6,<4"
+]
 
 authors = [
     {name = "Jianpeng Zhang"}
@@ -30,3 +39,6 @@ Issues = "https://github.com/LuckyRaphael/NAViECO/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+navieco = ["data/*.tsv.gz", "data/*.txt"]

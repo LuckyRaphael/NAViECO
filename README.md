@@ -23,3 +23,28 @@ Version `0.1.0a1` provides the initial Python package structure. Development wil
 **Working title**
 
 *Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers*
+
+## Layer0 development validation status
+
+NAViECO Layer0 performs CONCORD-based, reference-guided two-stage annotation:
+Stage A predicts 23 Level2 classes, and Stage B predicts Level3 states within
+hard-assigned Level2 branches (129 states in the complete reference taxonomy).
+Internal tests have verified two independently trained Stage B branches,
+hierarchical probability consistency, and H5AD round-tripping. A full-reference
+independent real-query assessment remains pending; this is a development release,
+not a benchmark of biological prediction accuracy.
+
+The reference (68,064 curated seed cells, 20 Stage A/B HVG lists, and manifests)
+is distributed separately from the GitHub package. Until a public download is
+provided, configure `NAVIECO_REFERENCE_DIR` to an accessible reference location,
+with `hvg_v2` either alongside the seed file or in the supported sibling
+`NAViECO_v1_release` directory. Input data require raw counts.
+
+```python
+import navieco as nv
+adata = nv.annotate('query.h5ad', level='fine', output='query_annotated.h5ad')
+```
+
+Classifier scores are uncalibrated. In fine mode, the Level3 array stores
+conditional probabilities for the selected Level2 branch; unevaluated branches
+are NaN, not zero. Class labels are stored in `adata.uns['navieco']`.
