@@ -2,21 +2,55 @@
 
 **NAViECO — Navigating Immune Ecosystems**
 
-NAViECO is a computational framework for reference-guided cell annotation, transcriptional cell-state recovery, and multicellular ecosystem analysis in cancer immunotherapy.
+NAViECO is a computational framework for characterizing cellular diversity and multicellular coordination in cancer immunotherapy. Its first implemented component, Layer 0, provides reference-guided hierarchical cell-type annotation of single-cell RNA-seq data.
 
-## Development status
+## Layer 0 | Hierarchical cell-type annotation
 
-NAViECO is currently under active development.
+NAViECO uses CONCORD for coarse-to-fine, semi-supervised cell-type annotation through three main steps:
 
-Version `0.1.0a1` provides the initial Python package structure. Development will begin with Layer 0. No analytical layers are implemented in this version.
+**1. Gene harmonization and feature selection**
 
-## Planned framework
+Query gene identifiers are harmonized with the Reference, and excluded genes are filtered. Precomputed Reference HVGs are combined with independently selected Query HVGs at each annotation resolution, retaining shared measured genes.
 
-- **Layer 0 — Cell annotation:** CONCORD-based semi-supervised annotation using user-defined references.
-- **Layer 1 — Cell-state recovery:** Reference-based recovery of parent-specific transcriptional states using previously derived matrix factorization models.
-- **Layer 2 — Multicellular nodes:** Construction of nodes from recovered cellular states.
-- **Layer 3 — Ecosystem architecture:** Recovery and characterization of multicellular network relationships.
-- **Layer 4 — Longitudinal dynamics:** Future development of immune ecosystem dynamics and response-associated scoring methods.
+**2. Reference-guided annotation**
+
+CONCORD jointly learns from labeled Reference cells and unlabeled Query cells to identify 23 Level 2 cell types belonging to 5 major cell lineages.
+
+**3. Hierarchical refinement**
+
+Query cells are further classified within their predicted Level 2 cell types using parent-specific CONCORD models, yielding Level 3 annotations across a reference taxonomy of 129 cell types.
+
+All annotation levels represent **cell types**, rather than inferred transcriptional cell states.
+
+## Reference
+
+NAViECO v1 includes 68,064 curated reference cells, organized into 5 lineages, 23 Level 2 cell types, and 129 Level 3 cell types, together with global and parent-specific HVG sets.
+
+The Reference is distributed separately from the GitHub source code.
+
+## Quick start
+
+```python
+import navieco as nv
+
+adata = nv.annotate(
+    "query.h5ad",
+    level="fine",
+    output="query_annotated.h5ad"
+)
+```
+
+Input data require raw counts in `.X` or `.layers["counts"]`. Set `NAVIECO_REFERENCE_DIR` to an accessible NAViECO reference directory before running annotation.
+
+Use `level="coarse"` for Level 1–2 annotations or `level="fine"` for Level 1–3 annotations. The original Query expression matrix is preserved.
+
+## Framework roadmap
+
+- **Layer 0 — Cell-type annotation:** Hierarchical CONCORD-based annotation (implemented).
+- **Layer 1 — Cell-state recovery:** Recovery of reference-defined transcriptional programs.
+- **Layer 2 — Multicellular coordination:** Identification of coordinated cellular components.
+- **Layer 3 — Ecosystem architecture:** Reconstruction of multicellular relationships.
+- **Layer 4 — Longitudinal dynamics:** Characterization of ecosystem changes during treatment.
 
 ## Manuscript
 
@@ -24,27 +58,8 @@ Version `0.1.0a1` provides the initial Python package structure. Development wil
 
 *Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers*
 
-## Layer0 development validation status
+## Development status
 
-NAViECO Layer0 performs CONCORD-based, reference-guided two-stage annotation:
-Stage A predicts 23 Level2 classes, and Stage B predicts Level3 states within
-hard-assigned Level2 branches (129 states in the complete reference taxonomy).
-Internal tests have verified two independently trained Stage B branches,
-hierarchical probability consistency, and H5AD round-tripping. A full-reference
-independent real-query assessment remains pending; this is a development release,
-not a benchmark of biological prediction accuracy.
+**v0.1.0a1 — Layer 0 development release.**
 
-The reference (68,064 curated seed cells, 20 Stage A/B HVG lists, and manifests)
-is distributed separately from the GitHub package. Until a public download is
-provided, configure `NAVIECO_REFERENCE_DIR` to an accessible reference location,
-with `hvg_v2` either alongside the seed file or in the supported sibling
-`NAViECO_v1_release` directory. Input data require raw counts.
-
-```python
-import navieco as nv
-adata = nv.annotate('query.h5ad', level='fine', output='query_annotated.h5ad')
-```
-
-Classifier scores are uncalibrated. In fine mode, the Level3 array stores
-conditional probabilities for the selected Level2 branch; unevaluated branches
-are NaN, not zero. Class labels are stored in `adata.uns['navieco']`.
+The annotation workflow has passed internal functional tests. Independent real-dataset validation and biological accuracy benchmarking remain pending.
