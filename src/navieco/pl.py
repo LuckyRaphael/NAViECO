@@ -183,4 +183,7 @@ def training_report(adata, save=None, show=False):
     return summary
 
 
-__all__ = ["annotation_report", "training_report"]
+from .umap_plot import umap_report
+
+
+__all__ = ["annotation_report", "training_report", "umap_report"]

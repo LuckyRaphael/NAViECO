@@ -15,7 +15,7 @@ from .joint import build_joint
 from .concord_engine import run_concord
 from .hierarchy import combine_stage_predictions
 from .qc import validate_annotation
-from .embedding import compute_query_umap
+from .embedding import compute_query_umap, ensure_scanpy_umap
 from .progress import log_progress
 from .config import resolve_advanced
 from time import perf_counter
@@ -304,6 +304,7 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
         if run_umap:
             log_progress(f"Query UMAP | starting from {result.obsm['X_navieco'].shape[1]}D latent", verbose)
             compute_query_umap(result)
+            ensure_scanpy_umap(result)  # NAVIECO_V3_CANONICAL_UMAP_FIX
             log_progress(f"Query UMAP | completed for {result.n_obs:,} cells", verbose)
 
         metadata["umap_computed"] = run_umap
@@ -337,6 +338,25 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             result.write_h5ad(output)
             log_progress("Saving H5AD | completed", verbose)
         log_progress(f"Layer0 completed | elapsed={perf_counter()-started:.1f}s", verbose)
+        # Automatically export native figures only when UMAP was requested.
+        # Fixed level colors were attached before annotation QC, above.
+        if run_umap:
+            from .umap_plot import umap_report
+            from .pl import annotation_report
+            if output is not None:
+                _figure_base = Path(output).with_suffix("")
+            elif isinstance(data, (str, Path)):
+                _source_path = Path(data)
+                _figure_base = _source_path.with_name(_source_path.stem + "_NAViECO")
+            else:
+                _figure_base = Path.cwd() / "NAViECO"
+            _umap_pdf = _figure_base.with_name(_figure_base.name + "_UMAP.pdf")
+            _annotation_pdf = _figure_base.with_name(_figure_base.name + "_annotation.pdf")
+            umap_report(result, save=_umap_pdf, show=False)
+            annotation_report(result, save=_annotation_pdf, show=False)
+            if verbose:
+                print(f"[NAViECO] Saved UMAP report: {_umap_pdf}", flush=True)
+                print(f"[NAViECO] Saved annotation report: {_annotation_pdf}", flush=True)
         return result
     finally:
         ref.file.close()

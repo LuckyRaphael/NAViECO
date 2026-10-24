@@ -140,7 +140,15 @@ with TemporaryDirectory(prefix="layer0_full_", dir="logs") as tmp:
     assert 'navieco_level2_colors' in result.uns
     assert validate_annotation(result)["status"] == "passed"
 
+    # NAVIECO UMAP AUTOSAVE VERIFICATION
+    umap_pdf = output.with_name(output.stem + "_UMAP.pdf")
+    summary_pdf = output.with_name(output.stem + "_annotation.pdf")
+    for report in (umap_pdf, summary_pdf):
+        assert report.is_file() and report.stat().st_size > 500, report
+        assert report.open("rb").read(4) == b"%PDF", report
+    assert result.obsm["X_umap"].shape == (24, 2)  # NAVIECO_V3_UMAP_ROUNDTRIP_FIX
     loaded = ad.read_h5ad(output)
+    assert loaded.obsm["X_umap"].shape == (24, 2)
     assert 'navieco_color_mapping' in loaded.uns
     assert 'navieco_level2_colors' in loaded.uns
     assert loaded.obsm["X_navieco"].shape == (24, 100)

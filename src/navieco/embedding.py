@@ -37,3 +37,39 @@ def compute_query_umap(adata):
 
     adata.obsm["X_navieco_umap"] = coordinates
     return coordinates
+
+
+def ensure_scanpy_umap(adata):
+    """Expose NAViECO Query UMAP as the standard Scanpy ``X_umap`` key.
+
+    Preserve the established NAViECO UMAP key; make a copy rather than
+    modifying the embedding. Never use an unrelated 2D embedding as UMAP.
+    """
+    import numpy as np
+
+    if "X_umap" in adata.obsm:
+        key = "X_umap"
+    else:
+        candidates = [
+            key for key in adata.obsm
+            if "umap" in str(key).casefold() and key != "X_umap"
+        ]
+        if len(candidates) != 1:
+            raise RuntimeError(
+                "Query UMAP was computed, but exactly one UMAP embedding "
+                "could not be identified. Available obsm keys: "
+                + repr(list(adata.obsm))
+            )
+        key = candidates[0]
+
+    xy = np.asarray(adata.obsm[key])
+    if xy.shape != (adata.n_obs, 2) or not np.isfinite(xy).all():
+        raise RuntimeError(
+            f"Invalid Query UMAP embedding {key!r}; expected "
+            f"({adata.n_obs}, 2) finite coordinates, got {xy.shape}."
+        )
+    if key != "X_umap":
+        adata.obsm["X_umap"] = xy.copy()
+    return "X_umap"
+
+# NAVIECO_V3_CANONICAL_UMAP_FIX
