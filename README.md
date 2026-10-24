@@ -1,4 +1,4 @@
-# NAViECO
+# <img width="54.36" height="53.685" alt="githubMarker" src="https://github.com/user-attachments/assets/20eef537-3652-4823-b3d8-88bf235ae956" />  NAViECO
 
 **NAViECO — Navigating Immune Ecosystems**
 
