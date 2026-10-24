@@ -3,6 +3,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
+from .palette import SC_COLOR, assign_labels
 
 
 def _font():
@@ -75,6 +76,19 @@ def annotation_report(adata, top_n=6, save=None, show=True):
     summary = summary.sort_values("n_cells", ascending=False)
     selected = summary.head(top_n).iloc[::-1]
 
+    # Prefer the release-wide, Reference-fixed label-to-color mapping saved in
+    # the annotated H5AD. For older H5AD files, use a deterministic unique
+    # OmicVerse-origin palette based on sorted labels.
+    class_colors = adata.uns.get("navieco_color_mapping", {}).get(label_key)
+    if class_colors is None:
+        class_colors = assign_labels(sorted(str(x) for x in summary.index))
+    unknown_labels = [str(x) for x in summary.index if str(x) not in class_colors]
+    if unknown_labels:
+        raise ValueError(f"Missing colors for {label_key}: {unknown_labels}")
+    bar_colors = [class_colors[str(x)] for x in selected.index]
+    if len(bar_colors) != len(set(bar_colors)):
+        raise RuntimeError("Duplicate class colors in annotation_report")
+
     # Default is deliberately small. Height grows only when users explicitly
     # request more than six categories, protecting text from overlap.
     height = 2.05 + max(0, min(top_n, len(summary)) - 6) * 0.15
@@ -85,7 +99,7 @@ def annotation_report(adata, top_n=6, save=None, show=True):
         )
         labels = [x if len(x) <= 18 else x[:15] + "..." for x in selected.index]
         left.barh(np.arange(len(selected)), selected["n_cells"].to_numpy(),
-                  height=0.68, color="#46566A", linewidth=0)
+                  height=0.68, color=bar_colors, linewidth=0)
         left.set_yticks(np.arange(len(selected)), labels)
         left.set_xlabel("Cells", labelpad=2)
         left.set_title(f"Level {target} cell types", loc="left", pad=5)
@@ -93,7 +107,7 @@ def annotation_report(adata, top_n=6, save=None, show=True):
         _clean_axes(left)
 
         right.hist(confidence, bins=np.linspace(0, 1, 13),
-                   color="#8BA5B2", edgecolor="white", linewidth=0.28)
+                   color=SC_COLOR[6], edgecolor="white", linewidth=0.28)
         right.set_xlim(0, 1)
         right.set_xticks([0, 0.5, 1])
         right.set_xlabel("Confidence", labelpad=2)
@@ -140,10 +154,10 @@ def training_report(adata, save=None, show=False):
                 raise ValueError(f"Nonfinite train loss: {model_id}")
             with plt.rc_context(_style()):
                 fig, ax = plt.subplots(figsize=(3.0, 1.85))
-                ax.plot(epoch, train, color="#335B75", linewidth=0.95, label="Train")
+                ax.plot(epoch, train, color=SC_COLOR[0], linewidth=0.95, label="Train")
                 mask = np.isfinite(val)
                 if mask.any():
-                    ax.plot(epoch[mask], val[mask], color="#B85B4B", linewidth=0.95,
+                    ax.plot(epoch[mask], val[mask], color=SC_COLOR[10], linewidth=0.95,
                             label="Validation")
                 ax.set_xlim(max(0.5, epoch.min() - 0.3), epoch.max() + 0.3)
                 ax.set_xlabel("Epoch", labelpad=2)

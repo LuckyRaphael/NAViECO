@@ -75,6 +75,38 @@ class TestPalette(unittest.TestCase):
             cats = sorted(set(query1.obs[key]))
             self.assertEqual(query1.uns[f'{key}_colors'], [m[key][c] for c in cats])
 
+    def test_internal_annotation_report_uses_saved_colors(self):
+        import matplotlib
+        matplotlib.use('Agg', force=True)
+        from matplotlib.axes import Axes
+        from unittest.mock import patch
+        from navieco.pl import annotation_report
+
+        obs = pd.DataFrame({
+            'navieco_level2': ['T', 'T', 'T', 'B', 'B', 'Fib'],
+            'navieco_level2_confidence': [0.8, 0.9, 0.7, 0.85, 0.95, 0.75],
+        })
+        fake = SimpleNamespace(obs=obs, n_obs=len(obs), uns={
+            'navieco': {'level': 'coarse'},
+            'navieco_color_mapping': {
+                'navieco_level2': {'T': SC_COLOR[0], 'B': SC_COLOR[1], 'Fib': SC_COLOR[2]}
+            },
+        })
+        seen = []
+        real_barh = Axes.barh
+
+        def track_barh(ax, *args, **kwargs):
+            seen.append(kwargs.get('color'))
+            return real_barh(ax, *args, **kwargs)
+
+        with patch.object(Axes, 'barh', track_barh):
+            summary = annotation_report(fake, top_n=3, show=False)
+
+        expected = [fake.uns['navieco_color_mapping']['navieco_level2'][x]
+                    for x in summary.head(3).iloc[::-1].index]
+        self.assertEqual(seen, [expected])
+        self.assertEqual(len(set(expected)), len(expected))
+
     def test_categorical_order_and_coarse_only(self):
         ref = pd.DataFrame({
             'Lineage':['Immune', 'Immune'],
