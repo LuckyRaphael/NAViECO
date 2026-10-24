@@ -80,6 +80,70 @@ def _extract_predictions(joint, cell_ids):
     return probabilities, latent
 
 
+
+def _export_annotation_reports(
+    result, *, data, output, run_umap, requested, verbose
+):
+    """Export reports from recorded results without training models."""
+    # Determine a consistent base path for automatic reports.
+    # With output specified, diagnostics are always exported.
+    # Without output, reports are exported when UMAP is requested.
+    _report_base = None
+
+    if output is not None:
+        _report_base = Path(output).with_suffix("")
+    elif run_umap:
+        if isinstance(data, (str, Path)):
+            _source_path = Path(data)
+            _report_base = _source_path.with_name(
+                _source_path.stem + "_NAViECO"
+            )
+        else:
+            _report_base = Path.cwd() / "NAViECO"
+
+    # Export recorded training diagnostics independently of UMAP.
+    if _report_base is not None:
+        from .diagnostics import export_training_diagnostics
+
+        _diagnostic_paths = export_training_diagnostics(
+            result,
+            base=_report_base,
+            requested=requested,
+        )
+
+        if verbose:
+            for _name, _path in _diagnostic_paths.items():
+                print(
+                    f"[NAViECO] Saved {_name}: {_path}",
+                    flush=True,
+                )
+
+    # UMAP and annotation figures require run_umap=True.
+    if run_umap:
+        from .umap_plot import umap_report
+        from .pl import annotation_report
+
+        _umap_pdf = _report_base.with_name(
+            _report_base.name + "_UMAP.pdf"
+        )
+        _annotation_pdf = _report_base.with_name(
+            _report_base.name + "_annotation.pdf"
+        )
+
+        umap_report(result, save=_umap_pdf, show=False)
+        annotation_report(result, save=_annotation_pdf, show=False)
+
+        if verbose:
+            print(
+                f"[NAViECO] Saved UMAP report: {_umap_pdf}",
+                flush=True,
+            )
+            print(
+                f"[NAViECO] Saved annotation report: {_annotation_pdf}",
+                flush=True,
+            )
+
+
 def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None, device="auto", advanced=None, batch_key=None, run_umap=False, verbose=True, batch_size=128):
     """Annotate Query cells with stage-specific Reference and Query HVGs.
 
@@ -338,25 +402,32 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             result.write_h5ad(output)
             log_progress("Saving H5AD | completed", verbose)
         log_progress(f"Layer0 completed | elapsed={perf_counter()-started:.1f}s", verbose)
-        # Automatically export native figures only when UMAP was requested.
-        # Fixed level colors were attached before annotation QC, above.
-        if run_umap:
-            from .umap_plot import umap_report
-            from .pl import annotation_report
-            if output is not None:
-                _figure_base = Path(output).with_suffix("")
-            elif isinstance(data, (str, Path)):
-                _source_path = Path(data)
-                _figure_base = _source_path.with_name(_source_path.stem + "_NAViECO")
-            else:
-                _figure_base = Path.cwd() / "NAViECO"
-            _umap_pdf = _figure_base.with_name(_figure_base.name + "_UMAP.pdf")
-            _annotation_pdf = _figure_base.with_name(_figure_base.name + "_annotation.pdf")
-            umap_report(result, save=_umap_pdf, show=False)
-            annotation_report(result, save=_annotation_pdf, show=False)
-            if verbose:
-                print(f"[NAViECO] Saved UMAP report: {_umap_pdf}", flush=True)
-                print(f"[NAViECO] Saved annotation report: {_annotation_pdf}", flush=True)
+        if output is not None or run_umap:
+            _export_annotation_reports(
+                result,
+                data=data,
+                output=output,
+                run_umap=run_umap,
+                verbose=verbose,
+                requested={
+                    "input": (
+                        str(data)
+                        if isinstance(data, (str, Path))
+                        else "in_memory_AnnData"
+                    ),
+                    "reference": str(reference),
+                    "level": level,
+                    "n_hvg": int(n_hvg),
+                    "batch_key": batch_key,
+                    "batch_size": int(batch_size),
+                    "device": str(device),
+                    "advanced": advanced,
+                    "run_umap": bool(run_umap),
+                    "output": (
+                        str(output) if output is not None else None
+                    ),
+                },
+            )
         return result
     finally:
         ref.file.close()

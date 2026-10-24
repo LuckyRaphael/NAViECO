@@ -132,14 +132,27 @@ with TemporaryDirectory(prefix="layer0_coarse_", dir="logs") as tmp:
 
     assert sparse.issparse(result.X)
     assert (result.X != original).nnz == 0
-    mappings = result.uns['navieco_color_mapping']
+    from navieco.palette import get_annotation_color_map
+    mappings = {
+        key: get_annotation_color_map(result, key)
+        for key in (
+            "navieco_level1",
+            "navieco_level2",
+            "navieco_level3",
+        )
+        if key in result.obs
+    }
+    assert all(m is not None for m in mappings.values())
     hexes = [color for level in mappings.values() for color in level.values()]
     assert len(hexes) == len(set(hexes))
     assert 'navieco_level2_colors' in result.uns
     assert validate_annotation(result)["status"] == "passed"
 
     loaded = ad.read_h5ad(output)
-    assert 'navieco_color_mapping' in loaded.uns
+    assert 'navieco_color_mapping_v2' in loaded.uns
+    assert 'navieco_color_mapping' not in loaded.uns
+    for key, expected in mappings.items():
+        assert get_annotation_color_map(loaded, key) == expected
     assert 'navieco_level2_colors' in loaded.uns
     assert loaded.obsm["X_navieco"].shape == (24, 64)
     assert "navieco_level3" not in loaded.obs

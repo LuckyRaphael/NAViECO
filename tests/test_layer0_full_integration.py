@@ -134,7 +134,17 @@ with TemporaryDirectory(prefix="layer0_full_", dir="logs") as tmp:
     assert sparse.issparse(result.X)
     assert (result.X != original).nnz == 0
 
-    mappings = result.uns['navieco_color_mapping']
+    from navieco.palette import get_annotation_color_map
+    mappings = {
+        key: get_annotation_color_map(result, key)
+        for key in (
+            "navieco_level1",
+            "navieco_level2",
+            "navieco_level3",
+        )
+        if key in result.obs
+    }
+    assert all(m is not None for m in mappings.values())
     hexes = [color for level in mappings.values() for color in level.values()]
     assert len(hexes) == len(set(hexes))
     assert 'navieco_level2_colors' in result.uns
@@ -149,7 +159,10 @@ with TemporaryDirectory(prefix="layer0_full_", dir="logs") as tmp:
     assert result.obsm["X_umap"].shape == (24, 2)  # NAVIECO_V3_UMAP_ROUNDTRIP_FIX
     loaded = ad.read_h5ad(output)
     assert loaded.obsm["X_umap"].shape == (24, 2)
-    assert 'navieco_color_mapping' in loaded.uns
+    assert 'navieco_color_mapping_v2' in loaded.uns
+    assert 'navieco_color_mapping' not in loaded.uns
+    for key, expected in mappings.items():
+        assert get_annotation_color_map(loaded, key) == expected
     assert 'navieco_level2_colors' in loaded.uns
     assert loaded.obsm["X_navieco"].shape == (24, 100)
     assert loaded.obsm["X_navieco_umap"].shape == (24, 2)

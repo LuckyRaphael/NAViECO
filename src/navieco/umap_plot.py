@@ -1,7 +1,7 @@
 """NAViECO single-cell UMAP plotting.
 
 Self-contained matplotlib implementation using NAViECO's own fixed palettes.
-Visual conventions: frameless scatter, compact UMAP1/UMAP2 arrows, bold legend
+Visual conventions: frameless scatter, compact UMAP1/UMAP2 arrows, regular-weight legend
 in the right margin, one page per annotation level. No OmicVerse dependency.
 """
 from pathlib import Path
@@ -9,20 +9,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .palette import assign_labels
+from .palette import assign_labels, get_annotation_color_map
 
 
 def _small_umap_arrows(ax):
     """Draw the characteristic small, frameless two-axis embedding inset."""
-    kw = dict(arrowstyle="-|>", lw=0.8, color="#262626",
-              mutation_scale=7, shrinkA=0, shrinkB=0)
+    kw = dict(arrowstyle="-|>", lw=0.6, color="#262626",
+              mutation_scale=6, shrinkA=0, shrinkB=0)
     ax.annotate("", xy=(0.185, 0.085), xytext=(0.075, 0.085),
                 xycoords="axes fraction", arrowprops=kw, annotation_clip=False)
     ax.annotate("", xy=(0.075, 0.200), xytext=(0.075, 0.085),
                 xycoords="axes fraction", arrowprops=kw, annotation_clip=False)
-    ax.text(0.19, 0.085, "UMAP1", fontsize=7, ha="left", va="center",
+    ax.text(0.19, 0.085, "UMAP1", fontsize=6.2, ha="left", va="center",
             transform=ax.transAxes)
-    ax.text(0.075, 0.21, "UMAP2", fontsize=7, ha="center", va="bottom",
+    ax.text(0.075, 0.21, "UMAP2", fontsize=6.2, ha="center", va="bottom",
             rotation=90, transform=ax.transAxes)
 
 
@@ -73,7 +73,7 @@ def umap_report(adata, save=None, show=False, levels=None):
             present = sorted(str(x) for x in values.dropna().unique())
             if not present:
                 raise ValueError(f"No valid labels in {key}.")
-            mapping = adata.uns.get("navieco_color_mapping", {}).get(key)
+            mapping = get_annotation_color_map(adata, key)
             if mapping is None:
                 mapping = assign_labels(present)
             missing = [x for x in present if x not in mapping]
@@ -83,37 +83,92 @@ def umap_report(adata, save=None, show=False, levels=None):
             if len(set(palette)) != len(palette):
                 raise ValueError(f"Duplicate plot colors in {key}")
 
-            # Legend outside the scatter panel; enlarge only for dense taxonomies.
+            # Compact layout with adaptive legend columns and height.
             n = len(present)
-            cols = 1 if n <= 22 else 2 if n <= 65 else 3
+            cols = (
+                1 if n <= 10 else
+                2 if n <= 34 else
+                3 if n <= 72 else
+                4 if n <= 110 else 5
+            )
             rows = int(np.ceil(n / cols))
-            height = max(4.4, min(14.0, rows * 0.19 + 1.3))
-            width = 7.0 if cols == 1 else 9.3 if cols == 2 else 11.8
+
+            # Estimate widths from the longest label in each column.
+            column_widths = []
+            for c in range(cols):
+                group = present[c * rows:(c + 1) * rows]
+                longest = max((len(x) for x in group), default=0)
+                column_widths.append(max(0.82, longest * 0.052 + 0.28))
+
+            width = 2.57 + sum(column_widths) + 0.06 * (cols - 1)
+            height = max(2.55, rows * 0.17 + 0.55)
+
             x_labels = values.fillna("<Unknown>").to_numpy(dtype=str)
-            colors = np.array([mapping.get(x, "#D5D5D5") for x in x_labels], dtype=str)
-            # Keep points small in large query datasets, draw all Query cells.
-            size = max(0.35, min(16, 12000 / max(adata.n_obs, 1)))
+            colors = np.array(
+                [mapping.get(x, "#D5D5D5") for x in x_labels],
+                dtype=str
+            )
+            size = max(0.90, min(8.5, 22000 / max(adata.n_obs, 1)))
 
             with plt.rc_context(_style()):
                 fig = plt.figure(figsize=(width, height), facecolor="white")
-                ax = fig.add_axes([0.07, 0.12, 0.54 if cols == 1 else 0.48, 0.76])
-                ax.scatter(xy[:, 0], xy[:, 1], c=colors, s=size,
-                           marker=".", linewidths=0, edgecolors="none",
-                           alpha=0.9, rasterized=adata.n_obs > 25000)
+
+                # Fixed, compact scatter area independent of legend size.
+                ax = fig.add_axes([
+                    0.08 / width,
+                    (height - 2.35) / (2 * height),
+                    2.35 / width,
+                    2.35 / height,
+                ])
+
+                ax.scatter(
+                    xy[:, 0], xy[:, 1],
+                    c=colors, s=size,
+                    marker=".", linewidths=0,
+                    edgecolors="none", alpha=0.95,
+                    rasterized=adata.n_obs > 25000,
+                )
                 ax.set_aspect("equal", adjustable="datalim")
                 ax.axis("off")
                 _small_umap_arrows(ax)
-                ax.set_title(f"NAViECO | Level {level}", loc="left",
-                             fontsize=10, fontweight="bold", pad=6)
-                handles = [Line2D([], [], linestyle="None", marker="o", markersize=4.2,
-                                  markerfacecolor=mapping[x], markeredgecolor="none",
-                                  label=x) for x in present]
-                ax.legend(handles=handles, labels=present, frameon=False,
-                          loc="center left", bbox_to_anchor=(1.03, 0.5),
-                          ncol=cols, fontsize=6.7, title=f"Cell types (n={n})",
-                          title_fontsize=7.5, columnspacing=0.8,
-                          handletextpad=0.25, labelspacing=0.35,
-                          prop={"size": 6.7, "weight": "bold"})
+
+                ax.set_title(
+                    f"Level {level} cell types",
+                    loc="left",
+                    fontsize=7.5,
+                    fontweight="normal",
+                    pad=4,
+                )
+
+                handles = [
+                    Line2D(
+                        [], [], linestyle="None",
+                        marker="o", markersize=3.4,
+                        markerfacecolor=mapping[x],
+                        markeredgecolor="none",
+                        label=x,
+                    )
+                    for x in present
+                ]
+
+                legend = fig.legend(
+                    handles=handles,
+                    labels=present,
+                    frameon=False,
+                    loc="center left",
+                    bbox_to_anchor=(2.50 / width, 0.5),
+                    bbox_transform=fig.transFigure,
+                    ncol=cols,
+                    title=f"Cell types (n={n})",
+                    title_fontsize=7,
+                    prop={"size": 6.4, "weight": "normal"},
+                    columnspacing=0.65,
+                    handletextpad=0.30,
+                    handlelength=0.8,
+                    labelspacing=0.28,
+                    borderaxespad=0,
+                )
+                legend.get_title().set_fontweight("normal")
                 if pdf is not None:
                     pdf.savefig(fig, dpi=300, bbox_inches="tight", pad_inches=0.06)
                     written.append(str(dest))

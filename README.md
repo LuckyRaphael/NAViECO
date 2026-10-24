@@ -43,13 +43,26 @@ adata = nv.annotate(
 )
 ```
 
-With `run_umap=True` and the example `output` path, NAViECO automatically creates:
+With `output="query_NAViECO.h5ad"`, NAViECO automatically saves:
 
-- `query_NAViECO.h5ad` — annotated Query with coordinates stored in `adata.obsm["X_umap"]`.
-- `query_NAViECO_UMAP.pdf` — a multi-page UMAP report showing Level 1, Level 2 and, in fine mode, Level 3. Coarse mode only shows Levels 1–2. Each page uses the same **Query-only** Stage A UMAP coordinates, clean axes, compact coordinate arrows and an external legend.
-- `query_NAViECO_annotation.pdf` — cell-type frequencies and prediction confidence, using the built-in NAViECO palette.
+- `query_NAViECO.h5ad` — annotated Query, confidence, embeddings, and recorded training history.
+- `query_NAViECO_training.pdf` — train/validation loss curves for every trained CONCORD model.
+- `query_NAViECO_training_summary.csv` — model-level training statistics and final losses.
+- `query_NAViECO_training_metrics.json` — recorded per-epoch training history.
+- `query_NAViECO_run_config.json` — requested arguments, effective configuration, package version, and model summaries.
 
-With `run_umap=False` (the default), UMAP and both automatic figure PDFs are omitted. The H5AD is written when `output` is set. If no `output` is given, automatic reports are placed beside the Query file (or in the current working directory for an in-memory AnnData input).
+When `run_umap=True`, two additional reports are generated:
+
+- `query_NAViECO_UMAP.pdf` — multilevel Query-only UMAP report.
+- `query_NAViECO_annotation.pdf` — cell-type composition and prediction-confidence report.
+
+Training diagnostics are automatically exported whenever `output` is specified, independently of `run_umap`.
+
+When `output=None` and `run_umap=True`, the six PDF/CSV/JSON reports are saved beside the input Query file, or in the current working directory for an in-memory AnnData input. No H5AD is written automatically.
+
+When both `output=None` and `run_umap=False`, no files are written automatically; annotations and training history are returned in memory.
+
+**Interpretation:** training/validation loss and classifier confidence are not independently validated cell-type annotation accuracy. The current release does not export a validation-accuracy curve or model checkpoints.
 
 ### Training configuration
 
@@ -97,7 +110,7 @@ The reports can also be generated independently from an annotated AnnData object
 nv.pl.umap_report(adata, save="query_NAViECO_UMAP.pdf", show=False)
 nv.pl.annotation_report(adata, save="query_NAViECO_annotation.pdf", show=False)
 
-# Training-loss report is optional and is not exported automatically.
+# Regenerate the automatically exported training-loss report if needed.
 print(nv.training_summary(adata))
 nv.pl.training_report(adata, save="query_NAViECO_training.pdf", show=False)
 ```

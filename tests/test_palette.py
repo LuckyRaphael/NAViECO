@@ -11,6 +11,28 @@ from navieco.palette import (
 )
 
 
+
+from navieco.palette import get_annotation_color_map
+
+
+def _test_color_maps(adata):
+    """Read fixed colors through the production color-map API."""
+    from navieco.palette import get_annotation_color_map
+
+    assert "navieco_color_mapping_v2" in adata.uns
+    assert "navieco_color_mapping" not in adata.uns
+
+    return {
+        key: get_annotation_color_map(adata, key)
+        for key in (
+            "navieco_level1",
+            "navieco_level2",
+            "navieco_level3",
+        )
+        if key in adata.obs
+    }
+
+
 class TestPalette(unittest.TestCase):
     def test_sources(self):
         self.assertEqual(len(SC_COLOR), 28)
@@ -67,8 +89,8 @@ class TestPalette(unittest.TestCase):
         attach_annotation_colors(query1, reference)
         attach_annotation_colors(query2, reference)
         pd.testing.assert_frame_equal(original, query1.obs)
-        m = query1.uns['navieco_color_mapping']
-        self.assertEqual(m, query2.uns['navieco_color_mapping'])
+        m = _test_color_maps(query1)
+        self.assertEqual(m, _test_color_maps(query2))
         merged = [c for d in m.values() for c in d.values()]
         self.assertEqual(len(merged), len(set(merged)))
         for key in ('navieco_level1','navieco_level2','navieco_level3'):
@@ -102,7 +124,7 @@ class TestPalette(unittest.TestCase):
         with patch.object(Axes, 'barh', track_barh):
             summary = annotation_report(fake, top_n=3, show=False)
 
-        expected = [fake.uns['navieco_color_mapping']['navieco_level2'][x]
+        expected = [get_annotation_color_map(fake, 'navieco_level2')[x]
                     for x in summary.head(3).iloc[::-1].index]
         self.assertEqual(seen, [expected])
         self.assertEqual(len(set(expected)), len(expected))
@@ -118,7 +140,7 @@ class TestPalette(unittest.TestCase):
         }), uns={})
         attach_annotation_colors(query, ref)
         self.assertNotIn('navieco_level3_colors', query.uns)
-        m = query.uns['navieco_color_mapping']['navieco_level2']
+        m = _test_color_maps(query)['navieco_level2']
         self.assertEqual(query.uns['navieco_level2_colors'], [m['T'], m['B']])
 
 

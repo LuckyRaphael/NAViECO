@@ -162,6 +162,66 @@ def assign_labels(labels, *, family: str = 'omicverse') -> dict[str, str]:
     return dict(zip(labels, palette(len(labels), family)))
 
 
+def get_annotation_color_map(adata, level_key):
+    """Recover the original fixed colors from new or legacy H5AD files.
+
+    Prefer the HDF5-safe label/color arrays in v2. Legacy files may
+    contain nested dictionaries when labels include '/'.
+    """
+    from collections.abc import Mapping
+
+    safe_maps = adata.uns.get("navieco_color_mapping_v2", {})
+
+    if isinstance(safe_maps, Mapping) and level_key in safe_maps:
+        record = safe_maps[level_key]
+
+        if not isinstance(record, Mapping):
+            raise ValueError(f"Invalid v2 color record: {level_key}")
+
+        labels = [str(x) for x in record["labels"]]
+        colors = [str(x) for x in record["colors"]]
+
+        if len(labels) != len(colors):
+            raise ValueError(f"Color/label length mismatch: {level_key}")
+
+        if len(labels) != len(set(labels)):
+            raise ValueError(f"Duplicate labels: {level_key}")
+
+        if len(colors) != len(set(colors)):
+            raise ValueError(f"Duplicate colors: {level_key}")
+
+        return dict(zip(labels, colors))
+
+    # Backward compatibility for existing H5AD files.
+    legacy = adata.uns.get("navieco_color_mapping", {})
+
+    if not isinstance(legacy, Mapping) or level_key not in legacy:
+        return None
+
+    result = {}
+
+    def visit(node, prefix=""):
+        if not isinstance(node, Mapping):
+            raise ValueError("Malformed legacy color mapping")
+
+        for key, value in node.items():
+            label = f"{prefix}/{key}" if prefix else str(key)
+
+            if isinstance(value, Mapping):
+                visit(value, label)
+            else:
+                if label in result:
+                    raise ValueError(f"Duplicate color label: {label}")
+                result[label] = str(value)
+
+    visit(legacy[level_key])
+
+    if len(result.values()) != len(set(result.values())):
+        raise ValueError(f"Duplicate colors: {level_key}")
+
+    return result
+
+
 def attach_annotation_colors(adata, reference_obs=None) -> None:
     """Persist unique, cohort-stable Level1/2/3 color maps in AnnData.
 
@@ -208,7 +268,19 @@ def attach_annotation_colors(adata, reference_obs=None) -> None:
         adata.uns[f'{output_key}_colors'] = [full_map[c] for c in categories]
 
     # Keep explicit mapping for reliable label-color reuse in NAViECO plotters.
-    adata.uns['navieco_color_mapping'] = maps
+    # Only v2 is written for new annotations. The legacy reader
+    # remains available for H5AD files created by older releases.
+    adata.uns.pop('navieco_color_mapping', None)
+
+    # HDF5-safe canonical representation. Cell-type names are array
+    # values rather than HDF5 dictionary keys, so '/' is preserved.
+    adata.uns['navieco_color_mapping_v2'] = {
+        level: {
+            'labels': list(color_map.keys()),
+            'colors': list(color_map.values()),
+        }
+        for level, color_map in maps.items()
+    }
     adata.uns['navieco_color_source'] = 'OmicVerse pl/_palette.py (static, no runtime dependency)'
 
     full_set = [c for m in maps.values() for c in m.values()]

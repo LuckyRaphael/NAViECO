@@ -3,7 +3,7 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from .palette import SC_COLOR, assign_labels
+from .palette import SC_COLOR, assign_labels, get_annotation_color_map
 
 
 def _font():
@@ -79,7 +79,7 @@ def annotation_report(adata, top_n=6, save=None, show=True):
     # Prefer the release-wide, Reference-fixed label-to-color mapping saved in
     # the annotated H5AD. For older H5AD files, use a deterministic unique
     # OmicVerse-origin palette based on sorted labels.
-    class_colors = adata.uns.get("navieco_color_mapping", {}).get(label_key)
+    class_colors = get_annotation_color_map(adata, label_key)
     if class_colors is None:
         class_colors = assign_labels(sorted(str(x) for x in summary.index))
     unknown_labels = [str(x) for x in summary.index if str(x) not in class_colors]
@@ -153,21 +153,21 @@ def training_report(adata, save=None, show=False):
             if not np.isfinite(epoch).all() or not np.isfinite(train).all():
                 raise ValueError(f"Nonfinite train loss: {model_id}")
             with plt.rc_context(_style()):
-                fig, ax = plt.subplots(figsize=(3.0, 1.85))
-                ax.plot(epoch, train, color=SC_COLOR[0], linewidth=0.95, label="Train")
+                fig, ax = plt.subplots(figsize=(2.65, 1.80))
+                ax.plot(epoch, train, color=SC_COLOR[0], linewidth=0.75, label="Train")
                 mask = np.isfinite(val)
                 if mask.any():
-                    ax.plot(epoch[mask], val[mask], color=SC_COLOR[10], linewidth=0.95,
+                    ax.plot(epoch[mask], val[mask], color=SC_COLOR[10], linewidth=0.75,
                             label="Validation")
                 ax.set_xlim(max(0.5, epoch.min() - 0.3), epoch.max() + 0.3)
                 ax.set_xlabel("Epoch", labelpad=2)
                 ax.set_ylabel("Loss", labelpad=2)
                 caption = str(record.get("parent") or "all cell types")
                 ax.set_title(f'{record["level"]} · {caption}', loc="left", pad=5)
-                ax.legend(frameon=False, fontsize=6, loc="best", handlelength=1.35,
+                ax.legend(frameon=False, prop={"size": 6.2, "weight": "normal"}, loc="best", handlelength=1.35,
                           borderaxespad=0.15, labelspacing=0.2)
                 _clean_axes(ax)
-                fig.subplots_adjust(left=0.18, right=0.98, bottom=0.24, top=0.87)
+                fig.subplots_adjust(left=0.20, right=0.97, bottom=0.25, top=0.84)
                 if pdf is not None:
                     pdf.savefig(fig, bbox_inches="tight", pad_inches=0.025)
                 elif output is not None:
