@@ -1,8 +1,7 @@
 """Stage-aware Layer 0 reporting with the original NAViECO figure style.
 
-Coarse: annotation/UMAP levels 1-2, training stage Level2.
-Fine:   annotation/UMAP levels 1-3, training stages Level2 and Level3.
-Level1 is derived from Level2 and is not an independently trained model.
+Coarse: annotation/UMAP levels 1-2, independent training for Levels 1 and 2.
+Fine:   annotation/UMAP levels 1-3, independent training for Levels 1, 2, and 3.
 """
 
 from pathlib import Path
@@ -34,23 +33,24 @@ def _requested_levels(adata, levels):
     return requested
 
 
-def annotation_report(adata, top_n=6, save=None, show=True, levels=None):
-    """Compact abundance/confidence summaries, one page per annotation level.
+def annotation_report(adata, top_n=None, save=None, show=True, levels=None, page_size=30):
+    """Cell-type abundance and prediction confidence, by annotation level.
 
-    Level1 is a parent-level summary of the Level2 predictions. If no distinct
-    Level1 confidence column exists, the histogram explicitly shows Level2
-    classifier confidence rather than misrepresenting a separate classifier.
-
-    A PDF contains one page per level. PNG and SVG destinations use _LevelN
-    suffixes. The returned table contains complete labels, all levels and all
-    categories; only plot axes are abbreviated.
+    Default (top_n=None) plots ALL observed cell types rather than Top 6.
+    ``top_n`` optionally limits only the plotted categories. The returned
+    DataFrame always includes all observed categories. For large numbers of
+    classes, PDF pages (or separate PNG/SVG files) are paginated automatically.
+    Level 1 confidence is from its independent classifier, whereas Level 2/3
+    confidence represents the selected hierarchy path's joint probability.
     """
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
     from .pl import _clean_axes, _style
 
-    if type(top_n) is not int or top_n < 1:
-        raise ValueError("top_n must be a positive integer.")
+    if top_n is not None and (type(top_n) is not int or top_n < 1):
+        raise ValueError("top_n must be None or a positive integer.")
+    if type(page_size) is not int or page_size < 1:
+        raise ValueError("page_size must be a positive integer.")
     if adata.n_obs == 0:
         raise ValueError("No annotated cells.")
     requested = _requested_levels(adata, levels)
@@ -75,7 +75,7 @@ def annotation_report(adata, top_n=6, save=None, show=True, levels=None):
             confidence = np.asarray(adata.obs[confidence_key], dtype=float)
             if not np.isfinite(confidence).all() or ((confidence < 0) | (confidence > 1)).any():
                 raise ValueError(f"Invalid confidence values in {confidence_key}.")
-            labels = adata.obs[label_key].astype("string").fillna("Unknown")
+            labels = adata.obs[label_key].astype(str)
             frame = pd.DataFrame({"cell_type": labels.to_numpy(dtype=str), "confidence": confidence})
             summary = frame.groupby("cell_type", sort=False)["confidence"].agg(
                 n_cells="size", mean_confidence="mean", median_confidence="median"
@@ -86,45 +86,75 @@ def annotation_report(adata, top_n=6, save=None, show=True, levels=None):
             full.insert(0, "level", f"Level{level}")
             full["confidence_source"] = confidence_key
             summaries.append(full)
-            selected = summary.head(top_n).iloc[::-1]
 
+            displayed = summary if top_n is None else summary.head(top_n)
             color_map = get_annotation_color_map(adata, label_key)
-            missing = [label for label in selected.index if label not in color_map]
+            if color_map is None:
+                raise ValueError(f"No saved color mapping for {label_key}.")
+            missing = [label for label in displayed.index if label not in color_map]
             if missing:
                 raise ValueError(f"No saved colors for {label_key}: {missing}")
-            bar_colors = [color_map[label] for label in selected.index]
-            height = 2.05 + max(0, len(selected) - 6) * 0.15
-            with plt.rc_context(_style()):
-                fig, (left, right) = plt.subplots(
-                    1, 2, figsize=(3.4, height),
-                    gridspec_kw={"width_ratios": [1.35, 1.0]},
-                )
-                short_labels = [x if len(x) <= 18 else x[:15] + "..." for x in selected.index]
-                left.barh(np.arange(len(selected)), selected["n_cells"].to_numpy(),
-                          height=0.68, color=bar_colors, linewidth=0)
-                left.set_yticks(np.arange(len(selected)), short_labels)
-                left.set_xlabel("Cells", labelpad=2)
-                left.set_title(f"Level {level} cell types", loc="left", pad=5)
-                left.ticklabel_format(axis="x", style="sci", scilimits=(0, 3), useOffset=False)
-                _clean_axes(left)
-                right.hist(confidence, bins=np.linspace(0, 1, 13),
-                           color=SC_COLOR[6], edgecolor="white", linewidth=0.28)
-                right.set_xlim(0, 1)
-                right.set_xticks([0, 0.5, 1])
-                right.set_xlabel("Confidence", labelpad=2)
-                right.set_ylabel("Cells", labelpad=2)
-                right.set_title(confidence_label, loc="left", pad=5)
-                _clean_axes(right)
-                fig.subplots_adjust(left=0.32, right=0.985, top=0.85,
-                                    bottom=0.23, wspace=0.85)
-                if pdf is not None:
-                    pdf.savefig(fig, dpi=300, bbox_inches="tight", pad_inches=0.025)
-                elif output is not None:
-                    file = output.with_name(f"{output.stem}_Level{level}{output.suffix}")
-                    fig.savefig(file, dpi=300, bbox_inches="tight", pad_inches=0.025)
-                if show:
-                    plt.show()
-                plt.close(fig)
+
+            total_pages = (len(displayed) + page_size - 1) // page_size
+            for page_index in range(total_pages):
+                chunk = displayed.iloc[page_index * page_size: (page_index + 1) * page_size]
+                selected = chunk.iloc[::-1]  # Largest count appears at the top.
+                count = len(selected)
+                height = max(2.5, 1.45 + 0.23 * count)
+                longest_label = max((len(str(x)) for x in selected.index), default=0)
+                left_margin = min(0.43, max(0.27, 0.22 + 0.0035 * longest_label))
+                title = f"Level {level} · {len(summary)} types"
+                if top_n is not None and len(displayed) < len(summary):
+                    title += f" · top {len(displayed)}"
+                if total_pages > 1:
+                    title += f" · {page_index + 1}/{total_pages}"
+
+                with plt.rc_context(_style()):
+                    fig, (left, right) = plt.subplots(
+                        1, 2, figsize=(7.5, height),
+                        gridspec_kw={"width_ratios": [1.8, 1.0]},
+                    )
+                    bar_colors = [color_map[label] for label in selected.index]
+                    bars = left.barh(
+                        np.arange(count), selected["n_cells"].to_numpy(),
+                        height=0.68, color=bar_colors, linewidth=0,
+                    )
+                    left.set_yticks(np.arange(count), [str(x) for x in selected.index])
+                    left.set_ylim(-0.8, count - 0.2)
+                    left.set_xlabel("Cells", labelpad=2)
+                    left.set_title(title, loc="left", pad=5)
+                    left.bar_label(bars, padding=2, fontsize=6)
+                    left.set_xlim(0, max(selected["n_cells"].max() * 1.28, 1))
+                    left.ticklabel_format(axis="x", style="sci", scilimits=(0, 3), useOffset=False)
+                    _clean_axes(left)
+
+                    # This histogram deliberately summarizes ALL Query cells,
+                    # even when the abundance chart is filtered or paginated.
+                    right.hist(
+                        confidence, bins=np.linspace(0, 1, 13),
+                        color=SC_COLOR[6], edgecolor="white", linewidth=0.28,
+                    )
+                    right.set_xlim(0, 1)
+                    right.set_xticks([0, 0.5, 1])
+                    right.set_xlabel("Confidence", labelpad=2)
+                    right.set_ylabel("All Query cells", labelpad=2)
+                    right.set_title("Confidence", loc="left", pad=5)
+                    _clean_axes(right)
+                    fig.subplots_adjust(
+                        left=left_margin, right=0.97, top=0.90,
+                        bottom=max(0.08, min(0.16, 0.38 / height)), wspace=0.58,
+                    )
+                    if pdf is not None:
+                        pdf.savefig(fig, dpi=300, bbox_inches="tight", pad_inches=0.04)
+                    elif output is not None:
+                        suffix = f"_page{page_index + 1}" if total_pages > 1 else ""
+                        path = output.with_name(
+                            f"{output.stem}_Level{level}{suffix}{output.suffix}"
+                        )
+                        fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.04)
+                    if show:
+                        plt.show()
+                    plt.close(fig)
     finally:
         if pdf is not None:
             pdf.close()
@@ -187,7 +217,7 @@ def training_report(adata, save=None, show=False, *, detail="stage"):
     records = adata.uns.get("navieco_training")
     if not isinstance(records, dict) or not records:
         raise ValueError("No training history found in adata.uns['navieco_training'].")
-    stage_ids = ("Level2",) if adata.uns["navieco"]["level"] == "coarse" else ("Level2", "Level3")
+    stage_ids = ("Level1", "Level2") if adata.uns["navieco"]["level"] == "coarse" else ("Level1", "Level2", "Level3")
     output = Path(save) if save is not None else None
     if output is not None:
         if output.suffix.lower() not in {".pdf", ".png", ".svg"}:
@@ -199,7 +229,9 @@ def training_report(adata, save=None, show=False, *, detail="stage"):
             subset = {name: r for name, r in records.items()
                       if str(r.get("level", "")).replace(" ", "").lower() == stage.lower()}
             if not subset:
-                raise ValueError(f"Missing trained model history for {stage}.")
+                # All visited branches may be deterministic single-child nodes.
+                # There is no real loss curve to display for these branches.
+                continue
             train = _epoch_statistics(subset, stage, "train")
             val = _epoch_statistics(subset, stage, "val")
             acc = _epoch_statistics(subset, stage, "accuracy")

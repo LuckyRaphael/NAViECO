@@ -1,4 +1,4 @@
-"""Query-only UMAP from the global Level2 CONCORD representation."""
+"""Global and within-parent Query-only UMAP utilities."""
 
 import anndata as ad
 import numpy as np
@@ -6,7 +6,7 @@ import scanpy as sc
 
 
 def compute_query_umap(adata):
-    """Compute Query-only UMAP from the full Stage A CONCORD latent.
+    """Compute Query-only UMAP from the full Stage A Level1 CONCORD latent.
 
     No PCA, latent truncation or additional batch integration is performed.
     The temporary neighbor graph is not added to the annotated Query.
@@ -73,3 +73,25 @@ def ensure_scanpy_umap(adata):
     return "X_umap"
 
 # NAVIECO_V3_CANONICAL_UMAP_FIX
+
+
+def compute_branch_umap(latent):
+    """Compute a separate Query-only UMAP in ONE independently trained branch.
+
+    The returned coordinates must not be compared between parent branches.
+    """
+    values = np.asarray(latent, dtype=np.float32)
+    if values.ndim != 2 or values.shape[0] < 4 or values.shape[1] < 2:
+        raise ValueError("Branch UMAP requires >=4 cells and >=2 latent dimensions.")
+    if not np.isfinite(values).all():
+        raise ValueError("Branch CONCORD latent contains non-finite values.")
+    work = ad.AnnData(X=np.zeros((len(values), 1), dtype=np.float32))
+    work.obsm["X_navieco_branch"] = values
+    sc.pp.neighbors(work, n_neighbors=min(15, len(values)-1),
+                    use_rep="X_navieco_branch", random_state=42)
+    sc.tl.umap(work, min_dist=0.3, random_state=42,
+               init_pos="spectral" if len(values) >= 20 else "random")
+    xy = np.asarray(work.obsm["X_umap"], dtype=np.float32)
+    if xy.shape != (len(values), 2) or not np.isfinite(xy).all():
+        raise RuntimeError("Invalid within-branch UMAP coordinates.")
+    return xy

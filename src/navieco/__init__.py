@@ -1,6 +1,6 @@
 """NAViECO — Navigating Immune Ecosystems."""
 
-__version__ = "0.1.0a1"
+__version__ = "0.1.0a2"
 
 from .annotation import annotate
 from . import pl

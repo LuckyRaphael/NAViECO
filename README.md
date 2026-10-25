@@ -55,6 +55,7 @@ adata = nv.annotate(
     "query.h5ad",
     reference="NAViECO_v1",
     level="fine",                 # "coarse" or "fine"
+    batch_key="sample_id",        # EDIT: column name in query.obs (e.g., "sample")
     run_umap=True,
     output="query_NAViECO.h5ad",
 )
@@ -64,10 +65,10 @@ The **NAViECO_v1** reference defines **5 Level 1 lineages, 23 Level 2 cell types
 
 | Mode | Annotation | Model workflow |
 | --- | --- | --- |
-| `level="coarse"` | Level 1 lineages + Level 2 cell types | Global Level 2 classification |
-| `level="fine"` (default) | Level 1–3 cell types | Global Level 2 classification followed by parent-specific Level 3 refinement |
+| `level="coarse"` | Level 1 lineages + Level 2 cell types | Global Level 1 classifier, then lineage-specific Level 2 classifiers |
+| `level="fine"` (default) | Level 1–3 cell types | Level 1 global classifier → Level 2 lineage-specific classifiers → Level 3 parent-specific classifiers |
 
-Level 0 performs gene harmonization and feature selection followed by reference-guided CONCORD classification. Level 1 lineage labels are derived from Level 2 predictions. The original query expression matrix is preserved.
+Level 0 performs gene harmonization and feature selection followed by three-stage, reference-guided CONCORD classification. The Level 1 classifier independently learns five lineages from the grouped Level 2 reference seed cells; Level 2 and Level 3 are each trained within their predicted parent lineage/type. The original query expression matrix is preserved. The public v1 reference has global frozen Level 2 HVGs and parent-specific Level 3 HVGs; the initial Level 1 and lineage-restricted Level 2 classifiers both reuse the global frozen HVGs.
 
 ### Reports
 
@@ -76,17 +77,19 @@ When an output `.h5ad` path is provided, NAViECO saves the annotated dataset tog
 | Output | Description |
 | --- | --- |
 | `query_NAViECO.h5ad` | Annotated cells, prediction confidence and embeddings |
-| `query_NAViECO_UMAP.pdf` | UMAP colored by annotation level (`run_umap=True`) |
+| `query_NAViECO_UMAP.pdf` | Global Level 1 UMAP, colored by annotation level (`run_umap=True`) |
+| `query_NAViECO_branch_UMAP.pdf` | Separate Level 2 UMAPs within each predicted lineage and Level 3 UMAPs within each predicted Level 2 parent, wherever at least 4 Query cells and a trained classifier are available |
 | `query_NAViECO_annotation.pdf` | Cell-type composition and prediction-confidence summaries (`run_umap=True`) |
 | `query_NAViECO_training.pdf` | Training and validation curves grouped by training stage |
 | `query_NAViECO_training_summary.csv` | Per-classifier training statistics |
 | `query_NAViECO_training_metrics.json` | Recorded epoch-level training metrics |
 | `query_NAViECO_run_config.json` | Run parameters and model summaries |
 
-In `coarse` mode, UMAP and annotation reports show **Levels 1–2**, and the training report shows **one stage**. In `fine` mode, they show **Levels 1–3** and **two training stages**, respectively. The original per-classifier training curves remain available.
+In `coarse` mode, UMAP and annotation reports show **Levels 1–2**, and the training report shows **two training stages**. In `fine` mode, they show **Levels 1–3** and **three training stages**, respectively. Each stage has its own reference-validation training curves; stages with multiple models show their median and interquartile range. The original per-classifier training curves remain available.
 
 ```python
 nv.pl.umap_report(adata, show=True)
+nv.pl.branch_umap_report(adata, show=True)  # separate Level2/3 model embeddings
 nv.pl.annotation_report(adata, show=True).head(10)
 nv.pl.training_report(adata, show=True).head(10)
 
@@ -94,7 +97,7 @@ nv.pl.training_report(adata, show=True).head(10)
 nv.pl.training_report(adata, show=True, detail="models")
 ```
 
-**Interpretation:** Any reported validation accuracy is measured on held-out **reference** cells, not on the user's query dataset. Prediction confidence is not an independent estimate of biological annotation accuracy.
+**Interpretation:** Validation accuracy is measured on held-out **reference** cells, not on the user's query dataset. Level 1 confidence is the independently trained classifier probability; Level 2/3 confidence is the joint probability along the selected hierarchy path, which is not calibrated against Query ground truth. The global UMAP uses the Stage A Level 1 embedding, colored by Level 1/2/3 annotation. Additional within-lineage Level 2 and within-parent Level 3 UMAPs are calculated separately, never pooled into a misleading global embedding.
 
 ### Common parameters
 
@@ -103,12 +106,26 @@ nv.pl.training_report(adata, show=True, detail="models")
 | `reference` | `"NAViECO_v1"` in examples | Reference name |
 | `level` | `"fine"` | `"coarse"` or `"fine"` classification |
 | `n_hvg` | `2000` | Number of query highly variable genes |
-| `batch_key` | `None` | Optional batch column in `adata.obs` |
+| `batch_key` | `None` | Query sample/batch identifier column in `adata.obs`, e.g. `"sample_id"` or `"sample"`; set to the **actual** column name |
 | `batch_size` | `128` | CONCORD training batch size |
 | `device` | `"auto"` | Automatic hardware selection |
 | `run_umap` | `False` | Calculate UMAP and generate visualization reports |
 | `verbose` | `True` | Display training progress |
 | `output` | `None` | Optional output `.h5ad` filename |
+
+**Sample identifiers:** `sample_id` is a typical **column name**, not a separate `nv.annotate()` argument. Use `batch_key="sample_id"` only when `query.obs["sample_id"]` exists; if your sample column is named `sample`, use `batch_key="sample"` instead. This determines Query domains used during CONCORD training; it does not rename cell IDs or patient IDs. With `batch_key=None`, NAViECO currently uses the `Dataset` column if present, otherwise a single Query domain. It **does not auto-detect `sample_id`**.
+
+### Advanced settings by training stage
+
+| Parameter | Default | Affected stage |
+| --- | --- | --- |
+| `latent_dim_level1` | `100` | Stage A: global five-lineage model |
+| `n_epochs_level1` | `15` | Stage A |
+| `latent_dim_level2` | `100` | Stage B: lineage-specific Level 2 parent models |
+| `n_epochs_level2` | `15` | Stage B |
+| `latent_dim_level3` | `300` | Stage C: parent-specific Level 3 models (fine only) |
+| `n_epochs_level3` | `15` | Stage C (fine only) |
+| `seed` | `42` | Every trained classifier |
 
 Advanced model settings are available without changing the basic interface:
 
@@ -117,17 +134,19 @@ adata = nv.annotate(
     "query.h5ad",
     level="fine",
     advanced={
-        "latent_dim_coarse": 100,
-        "n_epochs_coarse": 15,
-        "latent_dim_fine": 300,
-        "n_epochs_fine": 15,
+        "latent_dim_level1": 100,
+        "n_epochs_level1": 15,
+        "latent_dim_level2": 100,
+        "n_epochs_level2": 15,
+        "latent_dim_level3": 300,
+        "n_epochs_level3": 15,
         "seed": 42,
     },
     output="query_NAViECO.h5ad",
 )
 ```
 
-In `coarse` mode, fine-level model settings are ignored.
+In `coarse` mode, Level 3 settings are ignored. For backwards compatibility, `latent_dim_coarse` and `n_epochs_coarse` set both Level 1 and Level 2, while `latent_dim_fine` and `n_epochs_fine` set Level 3. Explicit Level 1/2/3 settings are recommended for new projects.
 
 ## Reference
 

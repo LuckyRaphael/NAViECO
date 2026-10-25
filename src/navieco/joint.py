@@ -39,18 +39,21 @@ def _query_domains(query, batch_key=None):
     return values.astype(str), key
 
 def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, parent=None, hvg_dir=None, min_query_hvg_cells=30, batch_key=None):
-    """Construct joint CONCORD data from frozen Reference and independent Query HVGs.
+    """Build a supervised branch for Level 1, Level 2, or Level 3.
 
-    Stage A predicts Level2 globally; Stage B predicts Level3 within one Level2.
-    A Stage B caller must supply only Query cells assigned to the chosen parent.
-    Without a stage argument, the previous build_joint interface is preserved.
+    A: all reference seeds -> Lineage (Level 1), global frozen HVGs.
+    B: reference seeds within a lineage -> Level 2, global frozen HVGs.
+    C: reference seeds within a Level 2 parent -> Level 3, parent HVGs.
+    The public v1 release has no frozen lineage-specific HVGs; Stage B
+    intentionally reuses Stage A's global Level2 HVGs instead of inventing
+    a new or potentially incompatible reference resource.
     """
     if query.uns.get("navieco_preprocessing", {}).get("normalization") != "normalize_total_10000_log1p":
         raise ValueError("Query must first be normalized using prepare_query().")
     if level not in {"coarse", "fine"}:
         raise ValueError("level must be 'coarse' or 'fine'.")
-    if stage not in {None, "A", "B"}:
-        raise ValueError("stage must be None, 'A', or 'B'.")
+    if stage not in {None, "A", "B", "C"}:
+        raise ValueError("stage must be None, 'A', 'B', or 'C'.")
     if not isinstance(n_hvg, int) or n_hvg < 1:
         raise ValueError("n_hvg must be a positive integer.")
     if query.n_obs == 0:
@@ -69,20 +72,32 @@ def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, paren
             raise ValueError("Stage A/B requires the candidate HVG directory.")
         hvg_dir = Path(hvg_dir)
         if stage == "A":
-            label_col = "Celltype_level2"
+            label_col = "Lineage"
             hvg_file = hvg_dir / "StageA_Level2_global_hvg3000.txt"
             reference_rows = None
+        elif stage == "B":
+            if not parent:
+                raise ValueError("Stage B requires a Level1 lineage name.")
+            label_col = "Celltype_level2"
+            hvg_file = hvg_dir / "StageA_Level2_global_hvg3000.txt"
+            reference_rows = np.flatnonzero(
+                reference.obs["Lineage"].astype(str).to_numpy() == parent
+            )
+            if not len(reference_rows):
+                raise ValueError(f"No Reference cells for lineage: {parent}")
         else:
             if not parent:
-                raise ValueError("Stage B requires a Level2 parent name.")
+                raise ValueError("Stage C requires a Level2 parent name.")
             label_col = "Celltype_level3"
             manifest = json.loads((hvg_dir / "StageB_Level3/StageB_manifest.json").read_text())
             if parent not in manifest["groups"]:
-                raise ValueError(f"No Stage B HVG model is defined for Level2: {parent}")
+                raise ValueError(f"No Level3 HVGs for parent: {parent}")
             hvg_file = hvg_dir / "StageB_Level3" / manifest["groups"][parent]["filename"]
-            reference_rows = np.flatnonzero(reference.obs["Celltype_level2"].astype(str).to_numpy() == parent)
-            if len(reference_rows) == 0:
-                raise ValueError(f"No Reference cells found for Level2: {parent}")
+            reference_rows = np.flatnonzero(
+                reference.obs["Celltype_level2"].astype(str).to_numpy() == parent
+            )
+            if not len(reference_rows):
+                raise ValueError(f"No Reference cells for Level2 parent: {parent}")
 
     if not {label_col, "Dataset"}.issubset(reference.obs.columns):
         raise ValueError(f"Reference requires {label_col} and Dataset annotations.")
@@ -103,7 +118,7 @@ def build_joint(reference, query, n_hvg=2000, level="fine", *, stage=None, paren
 
     # Query HVGs are calculated independently from the Query cells belonging
     # to this stage. Small Stage B subsets fall back to frozen Reference HVGs.
-    fallback = stage == "B" and query_allowed.n_obs < min_query_hvg_cells
+    fallback = stage in {"B", "C"} and query_allowed.n_obs < min_query_hvg_cells
     if fallback:
         query_hvg = set()
     elif query_allowed.n_vars <= n_hvg:

@@ -104,6 +104,84 @@ def _validate_two_stage(adata, info, probs, atol):
             "classes": conditional.shape[1], "status": "passed"}
 
 
+def _validate_three_stage(adata, info, atol):
+    """Validate separately trained Level1 and branch-conditional L2/L3."""
+    n = adata.n_obs
+    p1 = _named_probabilities(adata, "navieco_level1_probabilities", info.get("level1_classes"))
+    p2 = _named_probabilities(adata, "navieco_level2_conditional", info.get("level2_classes"))
+    keys = ("navieco_level1", "navieco_level2")
+    if not all(k in adata.obs for k in keys):
+        raise ValueError("Missing hierarchy columns.")
+    def valid_block(mat, label):
+        if not np.isfinite(mat).all() or (mat < -atol).any() or (mat > 1 + atol).any():
+            raise ValueError(f"Invalid {label} probabilities.")
+        if not np.allclose(mat.sum(axis=1), 1, rtol=0, atol=atol):
+            raise ValueError(f"{label} probabilities must sum to 1.")
+
+    valid_block(p1.to_numpy(dtype=float), "Level1")
+    predicted1 = p1.idxmax(axis=1).astype(str).to_numpy()
+    lineage = adata.obs[keys[0]].astype(str).to_numpy()
+    parent = adata.obs[keys[1]].astype(str).to_numpy()
+    if not np.array_equal(lineage, predicted1):
+        raise ValueError("Level1 prediction disagrees with trained classifier.")
+    c1 = p1.max(axis=1).to_numpy(dtype=float)
+    if not np.allclose(c1, adata.obs["navieco_level1_confidence"].to_numpy(dtype=float), atol=atol, rtol=0):
+        raise ValueError("Level1 confidence mismatch.")
+    lineages = dict(zip(info["level2_classes"], info["level2_lineages"]))
+    if set(lineages) != set(p2.columns):
+        raise ValueError("Level2 taxonomy mismatch.")
+    c2 = np.empty(n, dtype=float)
+    arr2 = p2.to_numpy(dtype=float)
+    for value in np.unique(lineage):
+        rows = np.flatnonzero(lineage == value)
+        inside = np.flatnonzero([lineages[col] == value for col in p2.columns])
+        outside = np.flatnonzero([lineages[col] != value for col in p2.columns])
+        if len(inside) == 0:
+            raise ValueError(f"No Level2 classes for lineage {value}.")
+        block = arr2[np.ix_(rows, inside)]
+        valid_block(block, "Level2 conditional")
+        if not np.isnan(arr2[np.ix_(rows, outside)]).all():
+            raise ValueError("Unvisited Level2 branches must be NaN.")
+        winners = inside[block.argmax(axis=1)]
+        if not np.array_equal(parent[rows], p2.columns[winners].to_numpy()):
+            raise ValueError("Level2 prediction disagrees with trained branch.")
+        c2[rows] = c1[rows] * arr2[rows, winners]
+    if not np.allclose(c2, adata.obs["navieco_level2_confidence"].to_numpy(dtype=float), atol=atol, rtol=0):
+        raise ValueError("Level2 confidence mismatch.")
+    if info["level"] == "fine":
+        p3 = _named_probabilities(adata, "navieco_level3_conditional", info["level3_classes"])
+        parents = dict(zip(info["level3_classes"], info["level3_parents"]))
+        if set(parents) != set(p3.columns):
+            raise ValueError("Level3 taxonomy mismatch.")
+        state = adata.obs["navieco_level3"].astype(str).to_numpy()
+        arr3 = p3.to_numpy(dtype=float)
+        c3 = np.empty(n, dtype=float)
+        for value in np.unique(parent):
+            rows = np.flatnonzero(parent == value)
+            inside = np.flatnonzero([parents[col] == value for col in p3.columns])
+            outside = np.flatnonzero([parents[col] != value for col in p3.columns])
+            if len(inside) == 0:
+                raise ValueError(f"No Level3 classes for parent {value}.")
+            block = arr3[np.ix_(rows, inside)]
+            valid_block(block, "Level3 conditional")
+            if not np.isnan(arr3[np.ix_(rows, outside)]).all():
+                raise ValueError("Unvisited Level3 branches must be NaN.")
+            winners = inside[block.argmax(axis=1)]
+            if not np.array_equal(state[rows], p3.columns[winners].to_numpy()):
+                raise ValueError("Level3 prediction disagrees with trained branch.")
+            c3[rows] = c2[rows] * arr3[rows, winners]
+        if not np.allclose(c3, adata.obs["navieco_level3_confidence"].to_numpy(dtype=float), atol=atol, rtol=0):
+            raise ValueError("Level3 confidence mismatch.")
+    scores = [adata.obs[f"navieco_level{i}_confidence"].to_numpy(dtype=float)
+              for i in ((1, 2, 3) if info["level"] == "fine" else (1, 2))]
+    if any((~np.isfinite(x)).any() or (x < -atol).any() or (x > 1 + atol).any() for x in scores):
+        raise ValueError("Invalid hierarchical confidence values.")
+    if any((child > ancestor + atol).any() for ancestor, child in zip(scores, scores[1:])):
+        raise ValueError("Hierarchical confidence must not increase after routing.")
+    return {"level": info["level"], "architecture": "three_stage_hard_route",
+            "cells": n, "classes": len(info["level2_classes"]), "status": "passed"}
+
+
 def validate_annotation(adata, atol=1e-3):
     """Check annotation structure, probabilities and hierarchical confidence.
 
@@ -115,6 +193,9 @@ def validate_annotation(adata, atol=1e-3):
     level = info.get("level")
     if level not in {"coarse", "fine"}:
         raise ValueError("Missing or invalid NAViECO annotation level.")
+
+    if info.get("architecture") == "three_stage_hard_route":
+        return _validate_three_stage(adata, info, atol)
 
     # Verify that coarse mode contains two levels and fine mode contains three.
     # Stale Level3 columns must never remain in a coarse annotation result.

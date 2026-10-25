@@ -1,4 +1,4 @@
-"""Combine two-stage NAViECO predictions without inventing probabilities."""
+"""Combine hierarchical CONCORD classifiers without inventing probabilities."""
 
 import numpy as np
 import pandas as pd
@@ -76,3 +76,76 @@ def combine_stage_predictions(reference_obs, level2_probs, stageB_probs):
 
 
 __all__ = ["combine_stage_predictions"]
+
+
+def combine_three_stage_predictions(reference_obs, level1_probs, level2_by_lineage,
+                                    level3_by_parent=None):
+    """Combine 5-lineage -> parent -> fine-celltype hard-routed predictions.
+
+    Level2 and Level3 arrays store *conditional* probabilities within the
+    visited branch. Unvisited branches are NaN. Reported confidence is the
+    selected-path joint probability, not a calibrated correctness estimate.
+    """
+    columns = ["Lineage", "Celltype_level2", "Celltype_level3"]
+    taxonomy = reference_obs[columns].astype(str).drop_duplicates()
+    l2_parent = taxonomy[["Celltype_level2", "Lineage"]].drop_duplicates().set_index("Celltype_level2")
+    l3_parent = taxonomy[["Celltype_level3", "Celltype_level2"]].drop_duplicates().set_index("Celltype_level3")
+    if not l2_parent.index.is_unique or not l3_parent.index.is_unique:
+        raise ValueError("Ambiguous reference taxonomy.")
+    lineages = pd.Index(taxonomy["Lineage"].unique())
+    if set(level1_probs.columns) != set(lineages):
+        raise ValueError("Stage A must predict every Level1 lineage.")
+    if not level1_probs.index.is_unique:
+        raise ValueError("Query cell IDs must be unique.")
+
+    def check(block, ids, classes, branch):
+        if not isinstance(block, pd.DataFrame) or not block.index.is_unique:
+            raise ValueError(f"Missing conditional probabilities: {branch}")
+        if set(block.index) != set(ids) or set(block.columns) != set(classes):
+            raise ValueError(f"Wrong cells or classes in branch: {branch}")
+        arr = block.loc[ids, classes].to_numpy(dtype=np.float64)
+        if (not np.isfinite(arr).all() or (arr < 0).any() or
+                not np.allclose(arr.sum(axis=1), 1, atol=1e-3, rtol=0)):
+            raise ValueError(f"Invalid probabilities: {branch}")
+        return pd.DataFrame(arr, index=ids, columns=classes)
+
+    p1 = check(level1_probs, level1_probs.index, list(level1_probs.columns), "Level1")
+    pred1 = p1.idxmax(axis=1)
+    p2 = pd.DataFrame(np.nan, index=p1.index, columns=l2_parent.index, dtype=np.float32)
+    pred2 = pd.Series("", index=p1.index, dtype=str)
+    cond2 = pd.Series(np.nan, index=p1.index, dtype=float)
+    for lineage, rows in pred1.groupby(pred1, sort=False).groups.items():
+        ids = pd.Index(rows)
+        children = l2_parent.index[l2_parent["Lineage"].eq(lineage)].tolist()
+        if len(children) == 1:
+            block = pd.DataFrame(1.0, index=ids, columns=children)
+        else:
+            block = check(level2_by_lineage.get(lineage), ids, children, f"Level2:{lineage}")
+        p2.loc[ids, children] = block.to_numpy(dtype=np.float32)
+        pred2.loc[ids] = block.idxmax(axis=1).to_numpy()
+        cond2.loc[ids] = block.max(axis=1).to_numpy()
+    c1 = p1.max(axis=1)
+    c2 = c1 * cond2
+    result = pd.DataFrame({
+        "navieco_level1": pred1, "navieco_level1_confidence": c1,
+        "navieco_level2": pred2, "navieco_level2_confidence": c2,
+    }, index=p1.index)
+    if level3_by_parent is None:
+        return result, p2, None
+
+    p3 = pd.DataFrame(np.nan, index=p1.index, columns=l3_parent.index, dtype=np.float32)
+    pred3 = pd.Series("", index=p1.index, dtype=str)
+    cond3 = pd.Series(np.nan, index=p1.index, dtype=float)
+    for parent, rows in pred2.groupby(pred2, sort=False).groups.items():
+        ids = pd.Index(rows)
+        children = l3_parent.index[l3_parent["Celltype_level2"].eq(parent)].tolist()
+        if len(children) == 1:
+            block = pd.DataFrame(1.0, index=ids, columns=children)
+        else:
+            block = check(level3_by_parent.get(parent), ids, children, f"Level3:{parent}")
+        p3.loc[ids, children] = block.to_numpy(dtype=np.float32)
+        pred3.loc[ids] = block.idxmax(axis=1).to_numpy()
+        cond3.loc[ids] = block.max(axis=1).to_numpy()
+    result["navieco_level3"] = pred3
+    result["navieco_level3_confidence"] = c2 * cond3
+    return result, p2, p3

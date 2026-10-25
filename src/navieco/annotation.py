@@ -1,4 +1,4 @@
-"""Public NAViECO Layer0 API for two-stage semi-supervised annotation."""
+"""Public NAViECO Layer0 API for hierarchical three-stage CONCORD annotation."""
 
 import os
 from pathlib import Path
@@ -15,7 +15,7 @@ from .reference_download import get_reference
 from .preprocessing import prepare_query
 from .joint import build_joint
 from .concord_engine import run_concord
-from .hierarchy import combine_stage_predictions
+from .hierarchy import combine_three_stage_predictions
 from .qc import validate_annotation
 from .embedding import compute_query_umap, ensure_scanpy_umap
 from .progress import log_progress
@@ -145,6 +145,9 @@ def _export_annotation_reports(
         )
 
         umap_report(result, save=_umap_pdf, show=False)
+        from .umap_plot import branch_umap_report
+        _branch_pdf = _report_base.with_name(_report_base.name + "_branch_UMAP.pdf")
+        branch_umap_report(result, save=_branch_pdf, show=False)
         annotation_report(result, save=_annotation_pdf, show=False)
 
         if verbose:
@@ -159,19 +162,11 @@ def _export_annotation_reports(
 
 
 def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None, device="auto", advanced=None, batch_key=None, run_umap=False, verbose=True, batch_size=128):
-    """Annotate Query cells with stage-specific Reference and Query HVGs.
-
-    Coarse trains Stage A to predict Level2. Fine trains Stage A followed by
-    parent-specific Stage B classifiers for Level3. Classifier confidences are
-    uncalibrated; fine predictions follow hard Level2 routing. The original
-    Query expression matrix is preserved in the returned AnnData.
+    """Train Level1 globally, Level2 within each predicted lineage, and
+    (fine mode) Level3 within each predicted Level2 parent. Reference labels
+    are supervised; Query cells remain unlabeled during model training.
     """
-    # Resolve only settings active for the requested hierarchy level.
     cfg = resolve_advanced(level, advanced)
-    latent_dim_coarse = cfg["latent_dim_coarse"]
-    n_epochs_coarse = cfg["n_epochs_coarse"]
-    latent_dim_fine = cfg.get("latent_dim_fine")
-    n_epochs_fine = cfg.get("n_epochs_fine")
     seed = cfg["seed"]
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 2:
         raise ValueError("batch_size must be an integer >= 2.")
@@ -258,115 +253,161 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
             raise RuntimeError("Ambiguous hierarchy in NAViECO Reference.")
 
         training_records = []
-
         with TemporaryDirectory(prefix="navieco_layer0_") as workdir:
             workdir = Path(workdir)
 
-            # Stage A: independent global Query HVGs union frozen Level2 HVGs.
-            log_progress("Stage A | building joint dataset and selecting HVGs", verbose)
-            joint = build_joint(ref, prepared, n_hvg=n_hvg, level="coarse", stage="A", hvg_dir=hvg_dir, batch_key=batch_key)
-            log_progress(
-                f"Stage A | cells={joint.n_obs:,}, features={joint.n_vars:,}, "
-                f"domains={joint.obs['navieco_domain'].nunique()}", verbose
-            )
+            # Stage A: all Level2 seed cells grouped by their original Lineage.
+            log_progress("Stage A | Level1 lineage classifier", verbose)
+            joint = build_joint(ref, prepared, n_hvg=n_hvg, level=level,
+                                stage="A", hvg_dir=hvg_dir, batch_key=batch_key)
             joint, model = run_concord(
-                joint, save_dir=workdir / "stageA", device=training_device,
-                latent_dim=latent_dim_coarse, verbose=verbose, stage_name="Level2", n_epochs=n_epochs_coarse, seed=seed, batch_size=batch_size
+                joint, save_dir=workdir / "stageA_level1", device=training_device,
+                latent_dim=cfg["latent_dim_level1"], n_epochs=cfg["n_epochs_level1"],
+                verbose=verbose, stage_name="Level1", seed=seed, batch_size=batch_size,
             )
-            p2, latent = _extract_predictions(joint, query.obs_names)
-            log_progress(
-                f"Stage A done | Level2 classes={len(p2.columns)}, latent={latent.shape[1]}",
-                verbose
-            )
-            training_records.append(_training_record(joint, model, "Level2"))
+            p1, latent = _extract_predictions(joint, query.obs_names)
+            if set(p1.columns) != set(taxonomy["Lineage"].unique()):
+                raise RuntimeError("Stage A classes disagree with Reference Level1.")
+            training_records.append(_training_record(joint, model, "Level1"))
             del joint, model
 
-            if set(p2.columns) != set(parent_table.index):
-                raise RuntimeError("Stage A classes disagree with Reference Level2.")
-            predicted_parents = p2.idxmax(axis=1)
+            # Stage B: train a distinct parent classifier within each predicted lineage.
+            selected_lineages = p1.idxmax(axis=1)
             stageB = {}
+            level2_latent = np.full(
+                (query.n_obs, cfg["latent_dim_level2"]), np.nan, dtype=np.float32
+            )
+            for lineage in selected_lineages.unique():
+                children = parent_table.index[parent_table["Lineage"].eq(lineage)]
+                ids = selected_lineages.index[selected_lineages.eq(lineage)]
+                if len(children) == 1:
+                    log_progress(f"Stage B | {lineage}: single Level2 class; deterministic", verbose)
+                    continue
+                log_progress(f"Stage B | {lineage}: query={len(ids):,}, Level2 classes={len(children)}", verbose)
+                branch = build_joint(
+                    ref, prepared[ids, :].copy(), n_hvg=n_hvg, level=level,
+                    stage="B", parent=lineage, hvg_dir=hvg_dir, batch_key=batch_key,
+                )
+                branch, model = run_concord(
+                    branch, save_dir=workdir / "stageB_level2" / str(len(stageB)),
+                    device=training_device, latent_dim=cfg["latent_dim_level2"],
+                    n_epochs=cfg["n_epochs_level2"], verbose=verbose,
+                    stage_name=f"Level2:{lineage}", seed=seed, batch_size=batch_size,
+                )
+                probs, branch_latent = _extract_predictions(branch, ids)
+                level2_latent[query.obs_names.get_indexer(ids)] = branch_latent
+                if set(probs.columns) != set(children):
+                    raise RuntimeError(f"Stage B classes disagree with Reference: {lineage}")
+                stageB[lineage] = probs
+                training_records.append(_training_record(branch, model, "Level2", lineage))
+                del branch, model
 
+            labels, p2_conditional, _ = combine_three_stage_predictions(
+                ref.obs, p1, stageB,
+            )
+
+            stageC = {}
+            level3_latent = None
             if level == "fine":
-                # Train only the Level2 branches receiving Query cells.
-                # Each branch gets its own Query subset and independently
-                # recalculates Query HVGs, with a small-subset fallback.
-                for parent in predicted_parents.unique():
+                level3_latent = np.full(
+                    (query.n_obs, cfg["latent_dim_level3"]), np.nan, dtype=np.float32
+                )
+            if level == "fine":
+                selected_parents = labels["navieco_level2"].astype(str)
+                for parent in selected_parents.unique():
                     children = state_table.index[state_table["Celltype_level2"].eq(parent)]
+                    ids = selected_parents.index[selected_parents.eq(parent)]
                     if len(children) == 1:
-                        log_progress(f"Stage B | {parent}: single child, no training", verbose)
+                        log_progress(f"Stage C | {parent}: single Level3 class; deterministic", verbose)
                         continue
-
-                    ids = predicted_parents.index[predicted_parents.eq(parent)]
-                    log_progress(
-                        f"Stage B | {parent}: query={len(ids):,}, child_types={len(children)}", verbose
-                    )
-                    subset = prepared[ids, :].copy()
+                    log_progress(f"Stage C | {parent}: query={len(ids):,}, Level3 classes={len(children)}", verbose)
                     branch = build_joint(
-                        ref, subset, n_hvg=n_hvg, level="fine",
-                        stage="B", parent=parent, hvg_dir=hvg_dir, batch_key=batch_key
-                    )
-                    log_progress(
-                        f"Stage B | {parent}: cells={branch.n_obs:,}, features={branch.n_vars:,}", verbose
+                        ref, prepared[ids, :].copy(), n_hvg=n_hvg, level=level,
+                        stage="C", parent=parent, hvg_dir=hvg_dir, batch_key=batch_key,
                     )
                     branch, model = run_concord(
-                        branch, save_dir=workdir / "stageB" / str(len(stageB)),
-                        device=training_device, latent_dim=latent_dim_fine, verbose=verbose, stage_name=f"Level3:{parent}", n_epochs=n_epochs_fine, seed=seed, batch_size=batch_size
+                        branch, save_dir=workdir / "stageC_level3" / str(len(stageC)),
+                        device=training_device, latent_dim=cfg["latent_dim_level3"],
+                        n_epochs=cfg["n_epochs_level3"], verbose=verbose,
+                        stage_name=f"Level3:{parent}", seed=seed, batch_size=batch_size,
                     )
-                    probabilities, _ = _extract_predictions(branch, ids)
-                    if set(probabilities.columns) != set(children):
-                        raise RuntimeError(f"Stage B classes disagree with Reference: {parent}")
-                    stageB[parent] = probabilities
-                    log_progress(f"Stage B | {parent}: completed {len(probabilities):,} query cells", verbose)
+                    probs, branch_latent = _extract_predictions(branch, ids)
+                    level3_latent[query.obs_names.get_indexer(ids)] = branch_latent
+                    if set(probs.columns) != set(children):
+                        raise RuntimeError(f"Stage C classes disagree with Reference: {parent}")
+                    stageC[parent] = probs
                     training_records.append(_training_record(branch, model, "Level3", parent))
-                    del branch, model, subset
+                    del branch, model
 
-        log_progress("Combining hierarchical labels and probabilities", verbose)
-        # Remove previous annotation fields when reannotating a Query.
+                labels, p2_conditional, p3_conditional = combine_three_stage_predictions(
+                    ref.obs, p1, stageB, stageC,
+                )
+
+        log_progress("Combining three-level hierarchy and probabilities", verbose)
         result = query.copy()
+        # Clear stale model embeddings and projections when reannotating.
+        for key in ("X_navieco", "X_navieco_level2", "X_navieco_level3",
+                    "X_navieco_umap", "X_navieco_level2_umap",
+                    "X_navieco_level3_umap"):
+            if key in result.obsm:
+                del result.obsm[key]
+        # A newly calculated UMAP must never silently reuse Query's old X_umap.
+        if run_umap and "X_umap" in result.obsm:
+            if "X_input_umap" not in result.obsm:
+                result.obsm["X_input_umap"] = np.asarray(result.obsm["X_umap"]).copy()
+            del result.obsm["X_umap"]
         old_columns = {"navieco_label", "navieco_confidence"}
         old_columns.update(f"navieco_level{i}{suffix}" for i in (1, 2, 3) for suffix in ("", "_confidence"))
         result.obs.drop(columns=[x for x in old_columns if x in result.obs], inplace=True)
-        if "navieco_level3_conditional" in result.obsm:
-            del result.obsm["navieco_level3_conditional"]
+        for key in ("navieco_level1_probabilities", "navieco_level2_conditional",
+                    "navieco_level3_conditional", "navieco_probabilities"):
+            if key in result.obsm:
+                del result.obsm[key]
+        for column in labels:
+            result.obs[column] = labels[column].to_numpy()
 
-        result.obsm["X_navieco"] = latent
-        result.obsm["navieco_probabilities"] = p2.to_numpy(dtype=np.float32, copy=True)
+        result.obsm["X_navieco"] = latent  # global, independently learned Level1 embedding
+        # Independent branch embeddings: meaningful only WITHIN a lineage or parent.
+        # Missing values mark deterministic single-child branches (no model trained).
+        result.obsm["X_navieco_level2"] = level2_latent
+        if level == "fine":
+            result.obsm["X_navieco_level3"] = level3_latent
+        result.obsm["navieco_level1_probabilities"] = p1.to_numpy(dtype=np.float32, copy=True)
+        result.obsm["navieco_level2_conditional"] = p2_conditional.to_numpy(dtype=np.float32, copy=True)
+        # Keep a straightforward legacy key, now holding GLOBAL Level1 probabilities.
+        result.obsm["navieco_probabilities"] = p1.to_numpy(dtype=np.float32, copy=True)
         metadata = {
             "reference": Path(ref.filename).name,
             "level": level,
-            "query_hvg": n_hvg,
-            "classes": p2.columns.tolist(),
-            "probability_level": "level2",
-            "confidence_type": "uncalibrated_classifier_probability",
-            "architecture": "stageA" if level == "coarse" else "two_stage_hard_route"
+            "query_hvg": int(n_hvg),
+            "classes": p1.columns.tolist(),
+            "probability_level": "level1",
+            "confidence_type": "uncalibrated_hierarchical_joint_probability",
+            "architecture": "three_stage_hard_route",
+            "level1_classes": p1.columns.tolist(),
+            "level2_classes": p2_conditional.columns.tolist(),
+            "level2_lineages": [parent_table.loc[x, "Lineage"] for x in p2_conditional.columns],
+            "stageB_routing": "predicted_Level1_only",
+            "stageB_models_run": len(stageB),
+            "hvg_level1": "StageA_Level2_global_hvg3000.txt (reused for Level1)",
+            "hvg_level2": "StageA_Level2_global_hvg3000.txt (lineage-restricted training)",
+            "hvg_level3": "StageB_Level3/ parent-specific frozen reference HVGs",
         }
-
-        if level == "coarse":
-            labels2 = predicted_parents
-            labels1 = labels2.map(parent_table["Lineage"])
-            class_lineages = np.array([parent_table.loc[x, "Lineage"] for x in p2.columns])
-            confidence1 = (p2.to_numpy() * (class_lineages[None, :] == labels1.to_numpy()[:, None])).sum(axis=1)
-            result.obs["navieco_level1"] = labels1.to_numpy()
-            result.obs["navieco_level1_confidence"] = confidence1.astype(np.float32)
-            result.obs["navieco_level2"] = labels2.to_numpy()
-            result.obs["navieco_level2_confidence"] = p2.max(axis=1).to_numpy(dtype=np.float32)
-        else:
-            labels, conditional = combine_stage_predictions(ref.obs, p2, stageB)
-            for column in labels.columns:
-                result.obs[column] = labels[column].to_numpy()
-            result.obsm["navieco_level3_conditional"] = conditional.to_numpy(dtype=np.float32, copy=True)
-
-            # Store hierarchical mappings as parallel lists so class names
-            # containing "/" cannot become HDF5 group paths.
-            metadata["level3_classes"] = conditional.columns.tolist()
-            metadata["level2_lineages"] = [parent_table.loc[x, "Lineage"] for x in p2.columns]
-            metadata["level3_parents"] = [state_table.loc[x, "Celltype_level2"] for x in conditional.columns]
-            metadata["stageB_routing"] = "predicted_Level2_only"
-            metadata["stageB_models_run"] = len(stageB)
-
-        metadata["latent_dim_coarse"] = latent_dim_coarse
         if level == "fine":
-            metadata["latent_dim_fine"] = latent_dim_fine
+            result.obsm["navieco_level3_conditional"] = p3_conditional.to_numpy(dtype=np.float32, copy=True)
+            metadata["level3_classes"] = p3_conditional.columns.tolist()
+            metadata["level3_parents"] = [state_table.loc[x, "Celltype_level2"] for x in p3_conditional.columns]
+            metadata["stageC_routing"] = "predicted_Level2_only"
+            metadata["stageC_models_run"] = len(stageC)
+        for i in (1, 2, 3) if level == "fine" else (1, 2):
+            metadata[f"latent_dim_level{i}"] = cfg[f"latent_dim_level{i}"]
+            metadata[f"n_epochs_level{i}"] = cfg[f"n_epochs_level{i}"]
+        # Backward-readable global-embedding metadata.
+        metadata["latent_dim_coarse"] = cfg["latent_dim_level1"]
+        metadata["n_epochs_coarse"] = cfg["n_epochs_level1"]
+        if level == "fine":
+            metadata["latent_dim_fine"] = cfg["latent_dim_level3"]
+            metadata["n_epochs_fine"] = cfg["n_epochs_level3"]
         selected_key = batch_key if batch_key is not None else (
             "Dataset" if "Dataset" in query.obs.columns else "single_domain"
         )
@@ -378,25 +419,44 @@ def annotate(data, reference="NAViECO_v1", level="fine", n_hvg=2000, output=None
         if "X_navieco_umap" in result.obsm:
             del result.obsm["X_navieco_umap"]
 
-        # UMAP is calculated solely on Query Stage A CONCORD coordinates.
+        # UMAP uses global Level1 CONCORD coordinates for every annotation level.
         if run_umap:
             log_progress(f"Query UMAP | starting from {result.obsm['X_navieco'].shape[1]}D latent", verbose)
             compute_query_umap(result)
             ensure_scanpy_umap(result)  # NAVIECO_V3_CANONICAL_UMAP_FIX
             log_progress(f"Query UMAP | completed for {result.n_obs:,} cells", verbose)
 
+            # Preserve separate within-branch projections, never concatenate branch
+            # embeddings into a false global Level2/Level3 coordinate system.
+            from .embedding import compute_branch_umap
+            for target, group_key in ((2, "navieco_level1"), (3, "navieco_level2")):
+                if target == 3 and level != "fine":
+                    continue
+                coordinates = np.full((result.n_obs, 2), np.nan, dtype=np.float32)
+                model_latent = np.asarray(result.obsm[f"X_navieco_level{target}"])
+                groups = result.obs[group_key].astype(str).to_numpy()
+                for parent in np.unique(groups):
+                    idx = np.flatnonzero(groups == parent)
+                    block = model_latent[idx]
+                    if len(idx) < 4 or not np.isfinite(block).all():
+                        log_progress(f"Level{target} branch UMAP | {parent}: unavailable (fewer than 4 query cells or no independent classifier)", verbose)
+                        continue
+                    coordinates[idx] = compute_branch_umap(block)
+                    log_progress(f"Level{target} branch UMAP | {parent}: {len(idx)} cells", verbose)
+                result.obsm[f"X_navieco_level{target}_umap"] = coordinates
+
         metadata["umap_computed"] = run_umap
+        metadata["umap_embedding_level1"] = "global Stage A Level1 model"
+        metadata["umap_embedding_level2"] = "separately fitted per predicted lineage"
+        metadata["umap_embedding_level3"] = "separately fitted per predicted Level2 parent"
         if run_umap:
             metadata["umap_basis"] = "X_navieco"
             metadata["umap_subset"] = "query_only"
             metadata["umap_neighbors"] = min(15, result.n_obs - 1)
             metadata["umap_min_dist"] = 0.3
 
-        metadata["n_epochs_coarse"] = n_epochs_coarse
         metadata["seed"] = seed
         metadata["batch_size"] = batch_size
-        if level == "fine":
-            metadata["n_epochs_fine"] = n_epochs_fine
         result.uns["navieco"] = metadata
 
         # H5AD-safe model IDs; parent names are stored as values, never keys.

@@ -206,11 +206,11 @@ def training_report(adata, save=None, show=False):
     return summary
 
 
-from .umap_plot import umap_report
+from .umap_plot import umap_report, branch_umap_report
 
 
 # Preserve the original per-model report and compact style as a supported mode.
 _legacy_training_report = training_report
 from .layer_reports import annotation_report, training_report
 
-__all__ = ["annotation_report", "training_report", "umap_report"]
+__all__ = ["annotation_report", "training_report", "umap_report", "branch_umap_report"]

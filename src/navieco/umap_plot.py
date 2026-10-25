@@ -186,3 +186,86 @@ def umap_report(adata, save=None, show=False, levels=None):
 
 
 __all__ = ["umap_report"]
+
+
+def branch_umap_report(adata, save=None, show=False, levels=None):
+    """Show Level2 embeddings per lineage and Level3 embeddings per Level2 parent.
+
+    Each independently trained branch has its own UMAP basis; coordinates
+    must never be treated as mutually aligned across branches.
+    Branches without >=4 Query cells or a trained classifier are skipped.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.lines import Line2D
+    from .pl import _style
+
+    targets = (2, 3) if "navieco_level3" in adata.obs else (2,)
+    if levels is not None:
+        levels = tuple(levels)
+        if any(value not in targets for value in levels):
+            raise ValueError(f"levels must be a subset of {targets}.")
+        targets = levels
+    dest = Path(save) if save is not None else None
+    if dest is not None and dest.suffix.lower() != ".pdf":
+        raise ValueError("Branch UMAP output must be a PDF.")
+    if dest is not None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    pdf = PdfPages(dest) if dest is not None else None
+    n_pages = 0
+    try:
+        for target in targets:
+            key = f"X_navieco_level{target}_umap"
+            if key not in adata.obsm:
+                raise ValueError(f"Missing {key}; annotate with run_umap=True.")
+            xy = np.asarray(adata.obsm[key], dtype=float)
+            if xy.shape != (adata.n_obs, 2):
+                raise ValueError(f"Invalid within-branch UMAP shape: {key}.")
+            group_key = "navieco_level1" if target == 2 else "navieco_level2"
+            class_key = f"navieco_level{target}"
+            groups = adata.obs[group_key].astype(str).to_numpy()
+            labels = adata.obs[class_key].astype(str).to_numpy()
+            palette = get_annotation_color_map(adata, class_key) or assign_labels(sorted(set(labels)))
+            for group in pd.unique(groups):
+                mask = groups == group
+                points = xy[mask]
+                if len(points) < 4 or not np.isfinite(points).all():
+                    continue
+                colors = [palette[x] for x in labels[mask]]
+                with plt.rc_context(_style()):
+                    fig, ax = plt.subplots(figsize=(4.4, 3.5))
+                    ax.scatter(points[:, 0], points[:, 1], c=colors, s=2.5,
+                               alpha=.8, edgecolors="none", rasterized=True)
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    for side in ax.spines.values():
+                        side.set_visible(False)
+                    ax.set_title(f"Level {target} · {group} (n={len(points):,})", loc="left")
+                    legend_labels = sorted(set(labels[mask]))
+                    handles = [Line2D([], [], marker="o", color="none", linestyle="None",
+                                      markerfacecolor=palette[v], markeredgecolor="none",
+                                      markersize=4, label=v) for v in legend_labels]
+                    ax.legend(handles=handles, frameon=False, loc="center left",
+                              bbox_to_anchor=(1.01, .5), fontsize=6)
+                    fig.subplots_adjust(left=.05, right=.66, bottom=.04, top=.9)
+                    if pdf is not None:
+                        pdf.savefig(fig, dpi=300, bbox_inches="tight")
+                    if show:
+                        plt.show()
+                    plt.close(fig)
+                n_pages += 1
+    finally:
+        if pdf is not None:
+            if n_pages == 0:
+                import matplotlib.pyplot as plt
+                fig, ax = plt.subplots(figsize=(4, 2))
+                ax.axis("off")
+                ax.text(.5, .5, "No branches with enough cells for independent UMAP",
+                        ha="center", va="center")
+                pdf.savefig(fig)
+                plt.close(fig)
+            pdf.close()
+    return n_pages
+
+
+__all__.append("branch_umap_report")
