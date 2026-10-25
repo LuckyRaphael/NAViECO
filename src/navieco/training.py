@@ -56,6 +56,20 @@ def training_summary(adata):
             "best_epoch": best_epoch
         })
 
+    # Supervised accuracy is measured in CONCORD's reference validation split.
+    for row in rows:
+        a = np.asarray(records[row["model"]].get("accuracy_history", []), dtype=float)
+        if a.size == 0:
+            row["final_train_accuracy"] = np.nan
+            row["final_val_accuracy"] = np.nan
+            row["best_val_accuracy"] = np.nan
+        else:
+            if a.ndim != 2 or a.shape[1] != 3:
+                raise ValueError("Malformed reference accuracy history")
+            row["final_train_accuracy"] = float(a[-1, 1])
+            row["final_val_accuracy"] = float(a[-1, 2])
+            finite = np.isfinite(a[:, 2])
+            row["best_val_accuracy"] = float(np.max(a[finite, 2])) if finite.any() else np.nan
     return pd.DataFrame(rows)
 
 

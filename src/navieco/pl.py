@@ -127,13 +127,14 @@ def annotation_report(adata, top_n=6, save=None, show=True):
 
 
 def training_report(adata, save=None, show=False):
-    """Plot observed CONCORD train/validation losses, one tiny page per model.
+    """Training/validation losses with optional reference-validation accuracy.
 
-    PDF supports multi-page reports. Other save formats use numbered files.
-    Returns the training summary. Does not retrain models.
+    Accuracy is evaluated on held-out reference labels, not on Query truth.
+    Returns per-model training summary without retraining.
     """
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
+    from matplotlib.ticker import PercentFormatter
     from .training import training_summary
 
     summary = training_summary(adata)
@@ -144,35 +145,57 @@ def training_report(adata, save=None, show=False):
     pdf = PdfPages(output) if output is not None and output.suffix.lower() == ".pdf" else None
 
     try:
-        for i, model_id in enumerate(sorted(records)):
+        for model_id in sorted(records):
             record = records[model_id]
             history = np.asarray(record["history"], dtype=float)
             if history.ndim != 2 or history.shape[1] != 3 or not len(history):
                 raise ValueError(f"Malformed CONCORD loss history: {model_id}")
             epoch, train, val = history.T
             if not np.isfinite(epoch).all() or not np.isfinite(train).all():
-                raise ValueError(f"Nonfinite train loss: {model_id}")
+                raise ValueError(f"Nonfinite training loss: {model_id}")
+            accuracy = np.asarray(record.get("accuracy_history", []), dtype=float)
+            if accuracy.size and (accuracy.ndim != 2 or accuracy.shape[1] != 3):
+                raise ValueError(f"Malformed reference accuracy history: {model_id}")
+
             with plt.rc_context(_style()):
-                fig, ax = plt.subplots(figsize=(2.65, 1.80))
-                ax.plot(epoch, train, color=SC_COLOR[0], linewidth=0.75, label="Train")
-                mask = np.isfinite(val)
-                if mask.any():
-                    ax.plot(epoch[mask], val[mask], color=SC_COLOR[10], linewidth=0.75,
-                            label="Validation")
+                fig, ax = plt.subplots(figsize=(3.65, 2.2))
+                l1, = ax.plot(epoch, train, color=SC_COLOR[0], linewidth=1.0, label="Train loss")
+                valid = np.isfinite(val)
+                handles = [l1]
+                if valid.any():
+                    l2, = ax.plot(epoch[valid], val[valid], color=SC_COLOR[10],
+                                  linewidth=1.0, label="Validation loss")
+                    handles.append(l2)
                 ax.set_xlim(max(0.5, epoch.min() - 0.3), epoch.max() + 0.3)
                 ax.set_xlabel("Epoch", labelpad=2)
                 ax.set_ylabel("Loss", labelpad=2)
                 caption = str(record.get("parent") or "all cell types")
                 ax.set_title(f'{record["level"]} · {caption}', loc="left", pad=5)
-                ax.legend(frameon=False, prop={"size": 6.2, "weight": "normal"}, loc="best", handlelength=1.35,
-                          borderaxespad=0.15, labelspacing=0.2)
                 _clean_axes(ax)
-                fig.subplots_adjust(left=0.20, right=0.97, bottom=0.25, top=0.84)
+
+                if accuracy.size:
+                    m = np.isfinite(accuracy[:, 2])
+                    if m.any():
+                        right = ax.twinx()
+                        l3, = right.plot(accuracy[m, 0], accuracy[m, 2],
+                                         color="#46795A", linestyle="--", linewidth=1.0,
+                                         label="Reference val. accuracy")
+                        right.set_ylim(0, 1.03)
+                        right.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+                        right.set_ylabel("Accuracy", labelpad=3)
+                        right.spines["top"].set_visible(False)
+                        right.spines["right"].set_linewidth(0.55)
+                        right.tick_params(axis="y", labelsize=6)
+                        handles.append(l3)
+                ax.legend(handles=handles, frameon=False, fontsize=5.7,
+                          loc="upper center", bbox_to_anchor=(0.5, -0.21), ncol=2,
+                          handlelength=1.4, labelspacing=0.25)
+                fig.subplots_adjust(left=0.15, right=0.84, bottom=0.32, top=0.85)
                 if pdf is not None:
-                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.025)
+                    pdf.savefig(fig, bbox_inches="tight", pad_inches=0.03)
                 elif output is not None:
-                    name = output.with_name(f"{output.stem}_{model_id}{output.suffix}")
-                    fig.savefig(name, dpi=300, bbox_inches="tight", pad_inches=0.025)
+                    path = output.with_name(f"{output.stem}_{model_id}{output.suffix}")
+                    fig.savefig(path, dpi=300, bbox_inches="tight", pad_inches=0.03)
                 if show:
                     plt.show()
                 else:
@@ -185,5 +208,9 @@ def training_report(adata, save=None, show=False):
 
 from .umap_plot import umap_report
 
+
+# Preserve the original per-model report and compact style as a supported mode.
+_legacy_training_report = training_report
+from .layer_reports import annotation_report, training_report
 
 __all__ = ["annotation_report", "training_report", "umap_report"]

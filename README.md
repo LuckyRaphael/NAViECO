@@ -6,6 +6,27 @@ NAViECO is a computational framework for reference-guided cell-type annotation, 
 
 The initial release implements **Layer 0**, a CONCORD-based framework for hierarchical cell-type annotation of single-cell RNA-seq data.
 
+## Reference acquisition
+
+The versioned `NAViECO_v1` reference is downloaded automatically from a
+public, immutable GitHub Release and cached after its SHA-256 checksum is
+verified. Downloading occurs only on first use; no HPC-specific path is needed.
+
+```python
+import navieco as nv
+from pathlib import Path
+Path("output").mkdir(exist_ok=True)
+reference_path = nv.get_reference("NAViECO_v1")  # Optional explicit download
+adata = nv.annotate("query.h5ad", reference="NAViECO_v1", level="fine",
+                    run_umap=True, output="output/query_NAViECO.h5ad")
+```
+
+`nv.annotate()` automatically performs the same reference resolution; calling
+`get_reference()` beforehand is optional. Set `NAVIECO_REFERENCE_DIR` only to
+use an existing local reference (for offline workflows). The downloadable
+reference contains the approved reference distribution, **not Query data**.
+The public release must be published before this automatic download works.
+
 ## Installation
 
 **Requirements:** Python >=3.10 (Python 3.11 tested), `concord-sc==1.0.13`, `torch>=2.2,<3`, `scanpy>=1.11,<2`, `anndata>=0.12,<1`, `numpy>=1.26,<3`, `pandas>=2,<3`, `scipy>=1.11,<2`, and `matplotlib>=3.6,<4`. See `pyproject.toml` for the complete specification.
@@ -16,11 +37,7 @@ cd NAViECO
 python -m pip install -e .
 ```
 
-The NAViECO reference is distributed **separately** and is not included in this repository. Set the reference directory to the folder containing the seed-cell H5AD, manifest and `hvg_v2` resources:
 
-```bash
-export NAVIECO_REFERENCE_DIR=/path/to/NAViECO_v1_release
-```
 
 ## Layer 0 | Hierarchical cell-type annotation
 

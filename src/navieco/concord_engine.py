@@ -138,3 +138,8 @@ def run_concord(joint, save_dir, device="cpu", n_epochs=15, seed=42,
         raise
     finally:
         _NAVIECO_TRAINING.reset(token)
+
+
+# Capture reference-validation accuracy without changing CONCORD internals.
+from .concord_accuracy import capture_run_concord
+run_concord = capture_run_concord(run_concord)

@@ -9,7 +9,9 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .reference import load_reference
+from .reference import load_reference as _load_reference_original
+from .reference_download import get_reference
+
 from .preprocessing import prepare_query
 from .joint import build_joint
 from .concord_engine import run_concord
@@ -19,6 +21,14 @@ from .embedding import compute_query_umap, ensure_scanpy_umap
 from .progress import log_progress
 from .config import resolve_advanced
 from time import perf_counter
+
+
+def load_reference(reference, *args, **kwargs):
+    # Resolve named public releases while retaining existing Reference loading.
+    if reference == "NAViECO_v1":
+        get_reference(reference)
+    return _load_reference_original(reference, *args, **kwargs)
+
 
 
 def _training_record(joint, model, level, parent=""):
@@ -35,6 +45,9 @@ def _training_record(joint, model, level, parent=""):
     ref_mask = joint.obs["navieco_origin"].astype(str).eq("reference")
     query_mask = joint.obs["navieco_origin"].astype(str).eq("query")
 
+    accuracy = np.asarray(
+        getattr(model, "navieco_accuracy_history", []), dtype=np.float64
+    ).reshape(-1, 3)
     return {
         "level": str(level),
         "parent": str(parent),
@@ -45,7 +58,8 @@ def _training_record(joint, model, level, parent=""):
         "epochs_requested": int(model.config.n_epochs),
         "epochs_completed": int(len(history)),
         "history_columns": ["epoch", "train_loss", "val_loss"],
-        "history": matrix
+        "history": matrix,
+        "accuracy_history": accuracy
     }
 
 
