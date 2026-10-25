@@ -1,51 +1,52 @@
-# <img width="54.36" height="53.685" alt="githubMarker" src="https://github.com/user-attachments/assets/20eef537-3652-4823-b3d8-88bf235ae956" />  NAViECO
+# <img width="54.36" height="53.685" alt="NAViECO logo" src="https://github.com/user-attachments/assets/20eef537-3652-4823-b3d8-88bf235ae956" /> NAViECO
 
-**NAViECO — Navigating Immune Ecosystems**
+**Navigating Immune Ecosystems**
 
-NAViECO is a computational framework for reference-guided cell-type annotation, transcriptional cell-state recovery, and multicellular ecosystem analysis in cancer immunotherapy.
+NAViECO is a modular computational framework for characterizing multicellular tumor ecosystems across cancers. It connects hierarchical cell-type annotation and transcriptional cell-state recovery with multicellular co-variation networks and coordinated multicellular modules (CSMs). Its planned response-scoring layer applies previously identified, dynamics-associated indicators of CSM abundance and within-CSM cell-state composition to new datasets to predict response to immune checkpoint blockade.
 
-The initial release implements **Layer 0**, a CONCORD-based framework for hierarchical cell-type annotation of single-cell RNA-seq data.
+**Current availability:** Layer 0 (hierarchical cell-type annotation) is available in the public Python package. Layers 1–4 form the planned downstream framework and are **not yet available as public APIs**.
 
-## Reference acquisition
+## Framework
 
-The versioned `NAViECO_v1` reference is downloaded automatically from a
-public, immutable GitHub Release and cached after its SHA-256 checksum is
-verified. Downloading occurs only on first use; no HPC-specific path is needed.
+| Layer | Focus | Purpose | Availability |
+| --- | --- | --- | --- |
+| **0 · Cell-type annotation** | Hierarchical, reference-guided classification | Assign cell lineages and fine-grained cell types to new scRNA-seq data | **Available** |
+| **1 · Cell-state recovery** | Reference-guided, parent-specific transcriptional states | Recover cellular state activities in annotated cell populations | Planned |
+| **2 · Multicellular coordination** | Co-varying states and multicellular nodes | Identify coordinated cellular components across biological samples | Planned |
+| **3 · Ecosystem networks** | State/node associations and multicellular modules | Recover network connections and coordinated multicellular modules (CSMs) | Planned |
+| **4 · Response scoring** | Previously identified dynamics-associated indicators | Score indicators derived from changes in CSM abundance and within-CSM cell-state composition in new datasets to predict treatment response | Planned |
 
-```python
-import navieco as nv
-from pathlib import Path
-Path("output").mkdir(exist_ok=True)
-reference_path = nv.get_reference("NAViECO_v1")  # Optional explicit download
-adata = nv.annotate("query.h5ad", reference="NAViECO_v1", level="fine",
-                    run_umap=True, output="output/query_NAViECO.h5ad")
-```
+NAViECO is intended to support recovery of defined cellular states and CSMs in independent cohorts, as well as downstream interpretation using spatial transcriptomics. **Co-variation across samples is not itself evidence of spatial colocalization or direct cell–cell regulation.**
 
-`nv.annotate()` automatically performs the same reference resolution; calling
-`get_reference()` beforehand is optional. Set `NAVIECO_REFERENCE_DIR` only to
-use an existing local reference (for offline workflows). The downloadable
-reference contains the approved reference distribution, **not Query data**.
-The public release must be published before this automatic download works.
+The multicellular co-variation component of NAViECO is conceptually inspired by [CoVarNet](https://github.com/QiangShiPKU/CoVarNet).
 
 ## Installation
 
-**Requirements:** Python >=3.10 (Python 3.11 tested), `concord-sc==1.0.13`, `torch>=2.2,<3`, `scanpy>=1.11,<2`, `anndata>=0.12,<1`, `numpy>=1.26,<3`, `pandas>=2,<3`, `scipy>=1.11,<2`, and `matplotlib>=3.6,<4`. See `pyproject.toml` for the complete specification.
+Python **≥3.10** is required; **Python 3.11** has been tested.
 
 ```bash
-git clone https://github.com/LuckyRaphael/NAViECO.git
-cd NAViECO
-python -m pip install -e .
+python -m pip install "git+https://github.com/LuckyRaphael/NAViECO.git"
 ```
 
+**Main dependencies and version constraints:**
 
+| Package | Version |
+| --- | --- |
+| Python | `>=3.10` (tested with 3.11) |
+| CONCORD (`concord-sc`) | `==1.0.13` |
+| PyTorch (`torch`) | `>=2.2,<3` |
+| Scanpy (`scanpy`) | `>=1.11,<2` |
+| AnnData (`anndata`) | `>=0.12,<1` |
+| NumPy (`numpy`) | `>=1.26,<3` |
+| pandas | `>=2,<3` |
+| SciPy (`scipy`) | `>=1.11,<2` |
+| Matplotlib (`matplotlib`) | `>=3.6,<4` |
 
-## Layer 0 | Hierarchical cell-type annotation
+See [`pyproject.toml`](pyproject.toml) for the full dependency specification. Installation pulls the declared dependencies automatically.
 
-Layer 0 combines Query-specific HVGs with predefined Reference HVGs and uses two-stage, reference-guided CONCORD classification. Stage A assigns **23 Level 2 cell types** across **5 Level 1 lineages**; in `level="fine"` mode, Stage B further resolves predicted parents into the **129 Level 3 cell types** defined in the complete Reference taxonomy. These labels represent *cell types*, not inferred transcriptional cell states.
+## Quick start · Layer 0
 
-Input AnnData must contain raw counts in `.layers["counts"]` or `.X`. NAViECO preserves the original Query expression matrix.
-
-### Quick start
+Provide an AnnData (`.h5ad`) file containing raw counts in `.layers["counts"]` or `.X`. The annotation workflow uses a versioned reference that is **automatically downloaded and cached** on first use; no manual reference setup is required.
 
 ```python
 import navieco as nv
@@ -53,58 +54,68 @@ import navieco as nv
 adata = nv.annotate(
     "query.h5ad",
     reference="NAViECO_v1",
-    level="fine",                 # "coarse" (Level 1–2) or "fine" (Level 1–3)
-    batch_key="sample_id",        # optional: column in query.obs
-    run_umap=True,               # compute UMAP and automatically save figures
-    output="query_NAViECO.h5ad"
+    level="fine",                 # "coarse" or "fine"
+    run_umap=True,
+    output="query_NAViECO.h5ad",
 )
 ```
 
-With `output="query_NAViECO.h5ad"`, NAViECO automatically saves:
+The **NAViECO_v1** reference defines **5 Level 1 lineages, 23 Level 2 cell types, and 129 Level 3 cell-type labels**. Level 3 provides finer **cell-type classification**, not the transcriptional cell states planned for Layer 1.
 
-- `query_NAViECO.h5ad` — annotated Query, confidence, embeddings, and recorded training history.
-- `query_NAViECO_training.pdf` — train/validation loss curves for every trained CONCORD model.
-- `query_NAViECO_training_summary.csv` — model-level training statistics and final losses.
-- `query_NAViECO_training_metrics.json` — recorded per-epoch training history.
-- `query_NAViECO_run_config.json` — requested arguments, effective configuration, package version, and model summaries.
+| Mode | Annotation | Model workflow |
+| --- | --- | --- |
+| `level="coarse"` | Level 1 lineages + Level 2 cell types | Global Level 2 classification |
+| `level="fine"` (default) | Level 1–3 cell types | Global Level 2 classification followed by parent-specific Level 3 refinement |
 
-When `run_umap=True`, two additional reports are generated:
+Level 0 performs gene harmonization and feature selection followed by reference-guided CONCORD classification. Level 1 lineage labels are derived from Level 2 predictions. The original query expression matrix is preserved.
 
-- `query_NAViECO_UMAP.pdf` — multilevel Query-only UMAP report.
-- `query_NAViECO_annotation.pdf` — cell-type composition and prediction-confidence report.
+### Reports
 
-Training diagnostics are automatically exported whenever `output` is specified, independently of `run_umap`.
+When an output `.h5ad` path is provided, NAViECO saves the annotated dataset together with training diagnostics. With `run_umap=True`, it also exports UMAP and annotation reports.
 
-When `output=None` and `run_umap=True`, the six PDF/CSV/JSON reports are saved beside the input Query file, or in the current working directory for an in-memory AnnData input. No H5AD is written automatically.
+| Output | Description |
+| --- | --- |
+| `query_NAViECO.h5ad` | Annotated cells, prediction confidence and embeddings |
+| `query_NAViECO_UMAP.pdf` | UMAP colored by annotation level (`run_umap=True`) |
+| `query_NAViECO_annotation.pdf` | Cell-type composition and prediction-confidence summaries (`run_umap=True`) |
+| `query_NAViECO_training.pdf` | Training and validation curves grouped by training stage |
+| `query_NAViECO_training_summary.csv` | Per-classifier training statistics |
+| `query_NAViECO_training_metrics.json` | Recorded epoch-level training metrics |
+| `query_NAViECO_run_config.json` | Run parameters and model summaries |
 
-When both `output=None` and `run_umap=False`, no files are written automatically; annotations and training history are returned in memory.
+In `coarse` mode, UMAP and annotation reports show **Levels 1–2**, and the training report shows **one stage**. In `fine` mode, they show **Levels 1–3** and **two training stages**, respectively. The original per-classifier training curves remain available.
 
-**Interpretation:** training/validation loss and classifier confidence are not independently validated cell-type annotation accuracy. The current release does not export a validation-accuracy curve or model checkpoints.
+```python
+nv.pl.umap_report(adata, show=True)
+nv.pl.annotation_report(adata, show=True).head(10)
+nv.pl.training_report(adata, show=True).head(10)
 
-### Training configuration
+# Optional: separate curves for individual classifiers
+nv.pl.training_report(adata, show=True, detail="models")
+```
 
-Regular controls can be passed directly to `nv.annotate()`:
+**Interpretation:** Any reported validation accuracy is measured on held-out **reference** cells, not on the user's query dataset. Prediction confidence is not an independent estimate of biological annotation accuracy.
+
+### Common parameters
 
 | Parameter | Default | Description |
 | --- | --- | --- |
-| `level` | `"fine"` | Full hierarchy or coarse Level 1–2 classification |
-| `n_hvg` | `2000` | Number of Query HVGs |
-| `batch_key` | `None` | Optional Query batch identifier in `.obs` |
-| `batch_size` | `128` | CONCORD batch size |
-| `device` | `"auto"` | Available training device selection |
-| `run_umap` | `False` | Query-only UMAP plus automatic figure PDFs |
-| `verbose` | `True` | Print training progress |
-| `output` | `None` | Optional output H5AD path |
+| `reference` | `"NAViECO_v1"` in examples | Reference name |
+| `level` | `"fine"` | `"coarse"` or `"fine"` classification |
+| `n_hvg` | `2000` | Number of query highly variable genes |
+| `batch_key` | `None` | Optional batch column in `adata.obs` |
+| `batch_size` | `128` | CONCORD training batch size |
+| `device` | `"auto"` | Automatic hardware selection |
+| `run_umap` | `False` | Calculate UMAP and generate visualization reports |
+| `verbose` | `True` | Display training progress |
+| `output` | `None` | Optional output `.h5ad` filename |
 
-Advanced training settings are available in the `advanced` dictionary:
+Advanced model settings are available without changing the basic interface:
 
 ```python
 adata = nv.annotate(
     "query.h5ad",
     level="fine",
-    batch_key="sample_id",
-    batch_size=128,
-    run_umap=True,
     advanced={
         "latent_dim_coarse": 100,
         "n_epochs_coarse": 15,
@@ -112,56 +123,26 @@ adata = nv.annotate(
         "n_epochs_fine": 15,
         "seed": 42,
     },
-    output="query_NAViECO.h5ad"
+    output="query_NAViECO.h5ad",
 )
 ```
 
-When `level="coarse"`, Stage B is not trained, and `latent_dim_fine` and `n_epochs_fine` are ignored. Stage A parameters and `seed` remain active.
+In `coarse` mode, fine-level model settings are ignored.
 
-### Figures and training diagnostics
+## Reference
 
-The reports can also be generated independently from an annotated AnnData object:
+The [NAViECO_v1 Reference Release](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_v1) includes the reference cells and global/parent-specific feature sets required by Layer 0. NAViECO verifies the downloaded archive using SHA-256 and reuses the locally cached reference on subsequent runs.
 
-```python
-# Regenerate figures from saved UMAP coordinates and annotations.
-nv.pl.umap_report(adata, save="query_NAViECO_UMAP.pdf", show=False)
-nv.pl.annotation_report(adata, save="query_NAViECO_annotation.pdf", show=False)
-
-# Regenerate the automatically exported training-loss report if needed.
-print(nv.training_summary(adata))
-nv.pl.training_report(adata, save="query_NAViECO_training.pdf", show=False)
-```
-
-UMAP generation is controlled by `run_umap=True`; `nv.pl.umap_report()` requires UMAP coordinates to be present in the supplied AnnData object.
-
-### Annotation and color outputs
-
-NAViECO records Level 1/2/3 labels as applicable, prediction confidence, CONCORD embeddings, and per-model training statistics. It includes a built-in categorical palette with unique HEX values and a fixed Reference-based label-to-color mapping for consistent colors across Query datasets; no separate palette package is required.
+An explicit download is optional:
 
 ```python
-colors = nv.get_palette(129)                    # 129 unique colors
-color_map = nv.get_color_map(["CD4_T", "CD8_T"])
-
-# After annotation: Scanpy-compatible colors for observed categories.
-adata.uns["navieco_level2_colors"]
-adata.uns["navieco_color_mapping"]
+reference_path = nv.get_reference("NAViECO_v1")
 ```
 
-Classifier confidence and training loss **are not** measures of independently validated biological annotation accuracy.
+For offline workflows, `NAVIECO_REFERENCE_DIR` can point to an existing extracted reference directory.
 
-## Planned layers
+## Research context
 
-- **Layer 1 — Cell-state recovery:** reference-guided recovery of transcriptional states within annotated cell types.
-- **Layer 2 — Multicellular coordination:** detection of coordinated cellular components across samples.
-- **Layer 3 — Ecosystem architecture:** characterization of multicellular networks and ecosystem organization.
-- **Layer 4 — Dynamics-associated scoring:** scores for longitudinally identified indicators associated with immune checkpoint blockade response.
+NAViECO is being developed alongside longitudinal pan-cancer analyses of multicellular tumor ecosystems and their associations with immune checkpoint blockade response. Indicators identified in those discovery analyses can be transferred to independent datasets for **reference-based recovery and response scoring**, without re-estimating longitudinal dynamics.
 
-## Manuscript
-
-**Working title:** *Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers*
-
-## Development status
-
-**Version 0.1.0a1 — Layer 0 development release.** Internal functional tests, small-scale two-stage CONCORD integration tests, plotting tests, resource checks and wheel-import checks have passed. Full-reference independent real-Query assessment and biological accuracy benchmarking remain pending. Layers 1–4 are not included in this release.
-
-Third-party notices for redistributed materials, where applicable, are maintained separately in `THIRD_PARTY_NOTICES.md`.
+*Associated manuscript (in preparation): Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers.*
