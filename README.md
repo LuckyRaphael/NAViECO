@@ -4,14 +4,14 @@
 
 NAViECO is a modular computational framework for characterizing multicellular tumor ecosystems across cancers. It connects hierarchical cell-type annotation and transcriptional cell-state recovery with multicellular co-variation networks and coordinated multicellular modules (CSMs). Its planned response-scoring layer applies previously identified, dynamics-associated indicators of CSM abundance and within-CSM cell-state composition to new datasets to predict response to immune checkpoint blockade.
 
-**Current availability:** Layer 0 (hierarchical cell-type annotation) is available in the public Python package. Layers 1–4 form the planned downstream framework and are **not yet available as public APIs**.
+**Current availability:** Layers 0–1 provide hierarchical cell-type annotation and fixed-reference cell-state recovery. Layers 2–4 remain under development.
 
 ## Framework
 
 | Layer | Focus | Purpose | Availability |
 | --- | --- | --- | --- |
 | **0 · Cell-type annotation** | Hierarchical, reference-guided classification | Assign cell lineages and fine-grained cell types to new scRNA-seq data | **Available** |
-| **1 · Cell-state recovery** | Reference-guided, parent-specific transcriptional states | Recover cellular state activities in annotated cell populations | Planned |
+| **1 · Cell-state recovery** | Fixed-W, parent-specific transcriptional states | Recover 103 reference-defined states across 19 cellular parents | **Available** |
 | **2 · Multicellular coordination** | Co-varying states and multicellular nodes | Identify coordinated cellular components across biological samples | Planned |
 | **3 · Ecosystem networks** | State/node associations and multicellular modules | Recover network connections and coordinated multicellular modules (CSMs) | Planned |
 | **4 · Response scoring** | Previously identified dynamics-associated indicators | Score indicators derived from changes in CSM abundance and within-CSM cell-state composition in new datasets to predict treatment response | Planned |
@@ -61,7 +61,7 @@ adata = nv.annotate(
 )
 ```
 
-The **NAViECO_v1** reference defines **5 Level 1 lineages, 23 Level 2 cell types, and 129 Level 3 cell-type labels**. Level 3 provides finer **cell-type classification**, not the transcriptional cell states planned for Layer 1.
+The **NAViECO_v1** reference defines **5 Level 1 lineages, 23 Level 2 cell types, and 129 Level 3 cell-type labels**. Level 3 provides finer **cell-type classification**, distinct from the transcriptional cell states recovered by Layer 1.
 
 | Mode | Annotation | Model workflow |
 | --- | --- | --- |
@@ -147,6 +147,29 @@ adata = nv.annotate(
 ```
 
 In `coarse` mode, Level 3 settings are ignored. For backwards compatibility, `latent_dim_coarse` and `n_epochs_coarse` set both Level 1 and Level 2, while `latent_dim_fine` and `n_epochs_fine` set Level 3. Explicit Level 1/2/3 settings are recommended for new projects.
+
+## Quick start · Layer 1
+
+Layer 1 applies **fixed-W NMF** to recover **103 reference-defined transcriptional states across 19 cellular parents**. Start from a Layer 0-annotated `.h5ad` containing `adata.obs["navieco_level2"]` and **raw gene counts in `adata.X`**. Layer 1 does not train new state references or alter the original counts, genes, or existing annotations.
+
+```python
+import navieco as nv
+
+adata = nv.recover_states(
+    data="query_NAViECO.h5ad",    # Layer 0-annotated, raw counts in .X
+    reference="NAViECO_states_v1",
+    output="query_NAViECO_Layer1.h5ad",
+)
+adata.file.close()  # File input + output returns read-only backed AnnData
+```
+
+The versioned [Layer 1 State Reference](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_states_v1) is automatically downloaded, SHA-256 verified, and cached on first use. To use an existing local reference, pass its directory as `reference`; advanced/offline setups may set `NAVIECO_STATES_REFERENCE`. Layer 0 references remain separate.
+
+GeneSync maps original query genes to reference genes. Each parent is independently normalized using the **full raw-count library size** for CP10K, followed by `log2(CP10K + 1)` and Query-local gene-wise z-scores across that parent's query cells. The reference W remains fixed; all initial components contribute to the H fit, while only QC-retained components are eligible for the final state label. Scaling is performed on pooled query cells within each parent, **not separately by cohort or cancer type**.
+
+Six new `.obs` columns are added: `navieco_state_parent`, `navieco_state`, `navieco_state_status`, `navieco_state_top1`, `navieco_state_margin`, and `navieco_state_retained_mass`. Cells outside the reference's Level 0-to-parent mapping retain their original data and receive `Not_applicable` status. The three score columns are **assignment diagnostics, not calibrated probabilities of biological accuracy**.
+
+For large H5ADs, supplying both `data` as a file path and `output` enables disk-backed, memory-efficient writing. `chunk_size=1024` is the default. Omit `output` only if you have sufficient memory to return an in-memory AnnData copy. An existing output file is never overwritten.
 
 ## Reference
 
