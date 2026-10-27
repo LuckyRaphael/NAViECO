@@ -127,7 +127,7 @@ nv.pl.training_report(adata, show=True, detail="models")
 | `n_epochs_level3` | `15` | Stage C (fine only) |
 | `seed` | `42` | Every trained classifier |
 
-Advanced model settings are available without changing the basic interface:
+Optional model settings:
 
 ```python
 adata = nv.annotate(
@@ -146,7 +146,7 @@ adata = nv.annotate(
 )
 ```
 
-In `coarse` mode, Level 3 settings are ignored. For backwards compatibility, `latent_dim_coarse` and `n_epochs_coarse` set both Level 1 and Level 2, while `latent_dim_fine` and `n_epochs_fine` set Level 3. Explicit Level 1/2/3 settings are recommended for new projects.
+In `coarse` mode, Level 3 settings are ignored. `latent_dim_coarse` and `n_epochs_coarse` apply to Levels 1–2; `latent_dim_fine` and `n_epochs_fine` apply to Level 3. Level-specific settings provide finer control.
 
 ## Quick start · Layer 1
 
@@ -163,9 +163,9 @@ adata = nv.recover_states(
 adata.file.close()  # File input + output returns read-only backed AnnData
 ```
 
-The versioned [Layer 1 State Reference](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_states_v1) is automatically downloaded, SHA-256 verified, and cached on first use. To use an existing local reference, pass its directory as `reference`; advanced/offline setups may set `NAVIECO_STATES_REFERENCE`. Layer 0 references remain separate.
+The versioned [Layer 1 State Reference](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_states_v1) is automatically downloaded, SHA-256 verified, and cached on first use. For offline use, provide a local reference directory through `reference` or set `NAVIECO_STATES_REFERENCE`.
 
-GeneSync maps original query genes to reference genes. Each parent is independently normalized using the **full raw-count library size** for CP10K, followed by `log2(CP10K + 1)` and Query-local gene-wise z-scores across that parent's query cells. The reference W remains fixed; all initial components contribute to the H fit, while only QC-retained components are eligible for the final state label. Scaling is performed on pooled query cells within each parent, **not separately by cohort or cancer type**.
+GeneSync maps original query genes to reference genes. Each parent is independently normalized using the **full raw-count library size** for CP10K, followed by `log2(CP10K + 1)` and Query-local gene-wise z-scores across that parent's query cells. The reference W remains fixed; all initial components contribute to the H fit, while only QC-retained components are eligible for the final state label.
 
 Six new `.obs` columns are added: `navieco_state_parent`, `navieco_state`, `navieco_state_status`, `navieco_state_top1`, `navieco_state_margin`, and `navieco_state_retained_mass`. Cells outside the reference's Level 0-to-parent mapping retain their original data and receive `Not_applicable` status. The three score columns are **assignment diagnostics, not calibrated probabilities of biological accuracy**.
 
