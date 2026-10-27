@@ -161,12 +161,7 @@ adata = nv.recover_states(
     output="query_NAViECO_Layer1.h5ad",
 )
 adata.file.close()  # File input + output returns read-only backed AnnData
-
-# Optional: generate state heatmaps and marker tables
-nv.pl.state_heatmaps("query_NAViECO_Layer1.h5ad", output_dir="results/state_heatmaps")
 ```
-
-For each state, up to five reference genes are selected by state-versus-rest log2FC within the same cellular parent (log2FC > 0.05 and higher than for any other state).
 
 The versioned [Layer 1 State Reference](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_states_v1) is automatically downloaded, SHA-256 verified, and cached on first use. For offline use, provide a local reference directory through `reference` or set `NAVIECO_STATES_REFERENCE`.
 
@@ -175,6 +170,14 @@ GeneSync maps original query genes to reference genes. Each parent is independen
 Six new `.obs` columns are added: `navieco_state_parent`, `navieco_state`, `navieco_state_status`, `navieco_state_top1`, `navieco_state_margin`, and `navieco_state_retained_mass`. Cells outside the reference's Level 0-to-parent mapping retain their original data and receive `Not_applicable` status. The three score columns are **assignment diagnostics, not calibrated probabilities of biological accuracy**.
 
 For large H5ADs, supplying both `data` as a file path and `output` enables disk-backed, memory-efficient writing. `chunk_size=1024` is the default. Omit `output` only if you have sufficient memory to return an in-memory AnnData copy. An existing output file is never overwritten.
+
+Optional: visualize the recovered cell states and their reference markers.
+
+```python
+nv.pl.state_heatmaps("query_NAViECO_Layer1.h5ad", output_dir="results/state_heatmaps")
+```
+
+For each state, up to five reference genes are selected by state-versus-rest log2FC within the same cellular parent (log2FC > 0.05 and higher than for any other state).
 
 ## Reference
 
