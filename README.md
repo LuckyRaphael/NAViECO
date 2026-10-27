@@ -10,8 +10,8 @@ NAViECO is a modular computational framework for characterizing multicellular tu
 
 | Layer | Focus | Purpose | Availability |
 | --- | --- | --- | --- |
-| **0 · Cell-type annotation** | Hierarchical, reference-guided classification | Assign cell lineages and fine-grained cell types to new scRNA-seq data | **Available** · [Tutorial](https://luckyraphael.github.io/NAViECO/tutorials/NAViECO_Layer0_v0.1.0a2_Official_User_Tutorial.html) |
-| **1 · Cell-state recovery** | Fixed-W, parent-specific transcriptional states | Recover 103 reference-defined states across 19 cellular parents | **Available** · [Tutorial](https://luckyraphael.github.io/NAViECO/tutorials/NAViECO_Layer1_Official_User_Tutorial.html) |
+| **0 · Cell-type annotation** | Hierarchical, reference-guided classification | Assign cell lineages and fine-grained cell types to new scRNA-seq data | **Available** · [Tutorial](https://luckyraphael.github.io/NAViECO/tutorials/NAViECO_Layer0_Tutorial.html) |
+| **1 · Cell-state recovery** | Fixed-W, parent-specific transcriptional states | Recover 103 reference-defined states across 19 cellular parents | **Available** · [Tutorial](https://luckyraphael.github.io/NAViECO/tutorials/NAViECO_Layer1_Tutorial.html) |
 | **2 · Multicellular coordination** | Co-varying states and multicellular nodes | Identify coordinated cellular components across biological samples | Planned |
 | **3 · Ecosystem networks** | State/node associations and multicellular modules | Recover network connections and coordinated multicellular modules (CSMs) | Planned |
 | **4 · Response scoring** | Previously identified dynamics-associated indicators | Score indicators derived from changes in CSM abundance and within-CSM cell-state composition in new datasets to predict treatment response | Planned |
