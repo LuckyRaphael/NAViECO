@@ -8,6 +8,7 @@ This module never trains W or changes the provided Query object.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -182,6 +183,75 @@ def recover_state_annotations(
     }, index=query.obs_names.copy())
 
 
+def _write_backed_state_h5ad(source: Path, destination: Path, annotations: pd.DataFrame):
+    """Copy original H5AD on disk and add six .obs columns without loading X.
+
+    Uses a same-directory partial file for validation and atomic publication.
+    Only the new .obs datasets and their column order are changed.
+    """
+    import h5py
+    from anndata import read_h5ad
+    from anndata.io import write_elem
+
+    if destination.resolve() == source.resolve():
+        raise ValueError("Output must not overwrite the original Query")
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
+    if not destination.parent.is_dir():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+    temporary = destination.with_name(destination.name + ".partial")
+    if temporary.exists() or temporary.is_symlink():
+        raise FileExistsError(f"Incomplete output already exists: {temporary}")
+
+    categories = ("navieco_state_parent", "navieco_state", "navieco_state_status")
+    numeric = ("navieco_state_top1", "navieco_state_margin", "navieco_state_retained_mass")
+    if not all(col in annotations for col in RESULT_COLUMNS):
+        raise ValueError("Incomplete Layer 1 annotation columns")
+
+    try:
+        shutil.copyfile(source, temporary)
+        with h5py.File(temporary, "r+") as h5:
+            obs = h5["obs"]
+            old_order = [
+                x.decode("utf-8") if isinstance(x, bytes) else str(x)
+                for x in obs.attrs["column-order"]
+            ]
+            if any(col in obs for col in RESULT_COLUMNS):
+                raise ValueError("Output already contains Layer 1 annotation columns")
+
+            for col in categories:
+                write_elem(obs, col, pd.Categorical(annotations[col]))
+            for col in numeric:
+                values = pd.to_numeric(annotations[col], errors="raise").to_numpy(dtype=np.float32)
+                write_elem(obs, col, values)
+            obs.attrs["column-order"] = np.asarray(
+                old_order + list(RESULT_COLUMNS), dtype=h5py.string_dtype("utf-8")
+            )
+
+        # AnnData must be able to read the finished file before it is published.
+        check = read_h5ad(temporary, backed="r")
+        try:
+            if check.n_obs != len(annotations) or not check.obs_names.equals(annotations.index):
+                raise ValueError("Written H5AD cell index differs from original Query")
+            if not set(RESULT_COLUMNS).issubset(check.obs.columns):
+                raise ValueError("Written H5AD is missing Layer 1 annotations")
+            if not check.obs["navieco_state_status"].astype(str).equals(
+                annotations["navieco_state_status"].astype(str)
+            ):
+                raise ValueError("Written H5AD has inconsistent state statuses")
+        finally:
+            check.file.close()
+
+        # Atomic no-overwrite publish, on the same filesystem.
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    # A backed object is returned; caller may close it with result.file.close().
+    return read_h5ad(destination, backed="r")
+
+
 def recover_states(
     data,
     reference: str | Path = "NAViECO_states_v1",
@@ -191,12 +261,13 @@ def recover_states(
     chunk_size: int = 1024,
     verbose: bool = True,
 ):
-    """Return a copy of original AnnData with Layer 1 state annotations added.
+    """Recover Layer 1 annotations without changing the source Query.
 
-    Source .X/.var_names/.obs are never overwritten; six new ``.obs`` columns
-    describe the state, parent, diagnostics and assignment status. Reading a
-    large H5AD by path is backed during inference; returning/saving the full
-    annotated H5AD subsequently materializes the original data in memory.
+    When ``data`` is a path and ``output`` is set, copy the input file on disk,
+    add six .obs columns and return a backed (read-only) AnnData. This path does
+    not materialize the expression matrix. Close it with ``result.file.close()``.
+    When ``output`` is omitted, or ``data`` is already an AnnData, an in-memory
+    AnnData copy is returned (potentially high memory usage).
     """
     from anndata import read_h5ad
 
@@ -204,16 +275,25 @@ def recover_states(
         source = Path(data).expanduser()
         if not source.is_file():
             raise FileNotFoundError(source)
-        if output is not None and Path(output).expanduser().resolve() == source.resolve():
-            raise ValueError("Output must not overwrite the original Query")
+        destination = Path(output).expanduser() if output is not None else None
+        if destination is not None:
+            if source.resolve() == destination.resolve():
+                raise ValueError("Output must not overwrite the original Query")
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
+
         a = read_h5ad(source, backed="r")
         try:
             annotations = recover_state_annotations(
                 a, reference, parents=parents, chunk_size=chunk_size, verbose=verbose
             )
-            result = a.to_memory()
+            if destination is None:
+                result = a.to_memory()
         finally:
             a.file.close()
+
+        if destination is not None:
+            return _write_backed_state_h5ad(source, destination, annotations)
     else:
         annotations = recover_state_annotations(
             data, reference, parents=parents, chunk_size=chunk_size, verbose=verbose
@@ -224,7 +304,7 @@ def recover_states(
         result.obs[col] = annotations[col].to_numpy()
     if output is not None:
         destination = Path(output).expanduser()
-        if destination.exists():
+        if destination.exists() or destination.is_symlink():
             raise FileExistsError(f"Refusing to overwrite existing output: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         result.write_h5ad(destination)

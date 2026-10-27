@@ -2,12 +2,14 @@
 
 import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 import pandas as pd
 from scipy import sparse
 
-from navieco.state_api import recover_state_annotations
+from navieco.state_api import recover_state_annotations, recover_states
 from navieco.state_reference import load_parent_state_reference
 
 
@@ -51,6 +53,54 @@ class TestStateAPI(unittest.TestCase):
         query = FakeQuery(x, genes, ["NK_CD56dim", "Epithelial lineage"])
         result = recover_state_annotations(query, self.ref_dir, parents=["NK"], verbose=False)
         self.assertEqual(result.loc["cell0", "navieco_state_status"], "Insufficient_parent_cells")
+
+    def test_backed_output_preserves_original_and_reopens(self):
+        import anndata as ad
+
+        with TemporaryDirectory() as work:
+            src = Path(work) / "query.h5ad"
+            dst = Path(work) / "query_Layer1.h5ad"
+            query = ad.AnnData(
+                X=self.sparse.X.copy(),
+                obs=self.sparse.obs.copy(),
+                var=pd.DataFrame(index=self.sparse.var_names.copy()),
+            )
+            query.uns["reference_integrity"] = "preserve"
+            query.write_h5ad(src)
+
+            result = recover_states(
+                data=src, reference=self.ref_dir, output=dst,
+                parents=["NK"], chunk_size=3, verbose=False,
+            )
+            try:
+                self.assertTrue(result.isbacked)
+                self.assertEqual(result.shape, query.shape)
+                self.assertTrue(result.var_names.equals(query.var_names))
+                self.assertEqual(result.uns["reference_integrity"], "preserve")
+                self.assertEqual(
+                    result.obs["navieco_level2"].astype(str).tolist(),
+                    query.obs["navieco_level2"].astype(str).tolist(),
+                )
+                self.assertEqual(int((result.obs.navieco_state_status == "Recovered").sum()), 6)
+                self.assertEqual(int((result.obs.navieco_state_status == "Not_applicable").sum()), 2)
+                self.assertEqual(int((result.obs.navieco_state_status == "Zero_scaled_signal").sum()), 1)
+                self.assertEqual((result.X[:] != query.X).nnz, 0)
+            finally:
+                result.file.close()
+            self.assertFalse(dst.with_name(dst.name + ".partial").exists())
+
+            original = ad.read_h5ad(src, backed="r")
+            try:
+                self.assertNotIn("navieco_state", original.obs)
+                self.assertEqual((original.X[:] != query.X).nnz, 0)
+            finally:
+                original.file.close()
+
+            with self.assertRaises(FileExistsError):
+                recover_states(
+                    data=src, reference=self.ref_dir, output=dst,
+                    parents=["NK"], verbose=False,
+                )
 
     def test_reject_missing_level0_label(self):
         query = FakeQuery(np.ones((2, 2)), ["A", "B"], ["NK_CD56dim"] * 2)
