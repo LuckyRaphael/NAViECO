@@ -166,6 +166,8 @@ adata.file.close()  # File input + output returns read-only backed AnnData
 nv.pl.state_heatmaps("query_NAViECO_Layer1.h5ad", output_dir="results/state_heatmaps")
 ```
 
+For each state, up to five reference genes are selected by state-versus-rest log2FC within the same cellular parent (log2FC > 0.05 and higher than for any other state).
+
 The versioned [Layer 1 State Reference](https://github.com/LuckyRaphael/NAViECO/releases/tag/references-NAViECO_states_v1) is automatically downloaded, SHA-256 verified, and cached on first use. For offline use, provide a local reference directory through `reference` or set `NAVIECO_STATES_REFERENCE`.
 
 GeneSync maps original query genes to reference genes. Each parent is independently normalized using the **full raw-count library size** for CP10K, followed by `log2(CP10K + 1)` and Query-local gene-wise z-scores across that parent's query cells. The reference W remains fixed; all initial components contribute to the H fit, while only QC-retained components are eligible for the final state label.
@@ -191,40 +193,3 @@ For offline workflows, `NAVIECO_REFERENCE_DIR` can point to an existing extracte
 NAViECO is being developed alongside longitudinal pan-cancer analyses of multicellular tumor ecosystems and their associations with immune checkpoint blockade response. Indicators identified in those discovery analyses can be transferred to independent datasets for **reference-based recovery and response scoring**, without re-estimating longitudinal dynamics.
 
 *Associated manuscript (in preparation): Coordinated multicellular dynamics track response to immune checkpoint blockade across cancers.*
-### Layer 1 · Compact reference-gene state heatmaps
-
-After running `nv.recover_states(...)` and saving the Layer 1 H5AD, generate
-state-specific reference-gene heatmaps and descriptive marker statistics in one line:
-
-```python
-import navieco as nv
-nv.pl.state_heatmaps("query_NAViECO_Layer1.h5ad")
-```
-
-By default, results are saved next to the H5AD under
-`query_NAViECO_Layer1_state_heatmaps/`. For a custom location or an offline
-reference path, use:
-
-```python
-nv.pl.state_heatmaps(
-    "query_NAViECO_Layer1.h5ad",
-    output_dir="results/state_heatmaps",
-    reference="NAViECO_states_v1",  # or the path to the extracted reference
-)
-```
-
-Outputs: one tiny fixed-size PDF and 600-dpi PNG per eligible NMF parent;
-`*_reference_gene_state_vs_rest.csv` (all matched, variable W-reference genes),
-`*_SE_style_top5_markers.csv`, and `*_state_heatmap_qc.csv`.
-The figure uses full raw-count library sizes for CP10K normalization, then
-log2(CP10K+1), within-state bin smoothing, and per-gene z-scores clipped for
-display to [-1,1]. The plot colors, figure dimensions, smoothing settings,
-bin counts, marker thresholds and separating-line widths are adjustable **inside**
-`src/navieco/state_heatmaps.py` via `_CONFIG`; ordinary users do not need them.
-Marker selection uses pooled same-parent **state vs rest**, independent of
-cancer type: log2FC > 0.05, higher log2FC than every other state, then highest
-log2FC (up to five marker genes per state). The CSV reports PCT and ΔPCT as
-descriptive statistics; **no p-values or FDRs** are computed. These are
-reference-constrained, post-recovery signatures, not independent validation.
-Requires Layer 1 `.obs["navieco_state_*" ]` labels and **raw counts in `.X`**.
-`nv.pl.state_heatmaps` never changes the input H5AD or re-runs state recovery.
