@@ -214,3 +214,6 @@ _legacy_training_report = training_report
 from .layer_reports import annotation_report, training_report
 
 __all__ = ["annotation_report", "training_report", "umap_report", "branch_umap_report"]
+
+# Layer 1 fixed-reference compact state heatmaps
+from .state_heatmaps import state_heatmaps
