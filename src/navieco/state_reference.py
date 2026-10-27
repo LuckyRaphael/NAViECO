@@ -9,6 +9,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
+import shutil
+import tempfile
+import time
+from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from .gene_harmonization import map_genes
+from .reference_download import _safe_extract
 
 
 @dataclass(frozen=True)
@@ -133,3 +139,96 @@ def align_query_genes(query_genes, reference_genes) -> pd.DataFrame:
     mapping = map_genes(query_genes, reference_genes)
     mapping.insert(0, "query_index", np.arange(len(mapping), dtype=np.int64))
     return mapping
+
+
+# Versioned public Layer 1 asset; independent from Layer 0 H5AD references.
+_STATE_ASSET = {
+    "name": "NAViECO_states_v1",
+    "url": (
+        "https://github.com/LuckyRaphael/NAViECO/releases/download/"
+        "references-NAViECO_states_v1/NAViECO_states_v1.zip"
+    ),
+    "sha256": "8033246528753456ce148639c3fc331e3c0eaf2687a183ba402d198d1588b07c",
+}
+
+
+def get_state_reference(name: str = "NAViECO_states_v1") -> Path:
+    """Download and cache the verified Layer 1 Reference on first use.
+
+    Cache location: $XDG_CACHE_HOME/navieco/states/<name>, or ~/.cache.
+    An explicit local reference path / NAVIECO_STATES_REFERENCE is handled
+    by ``state_api._resolve_state_reference`` before invoking this function.
+    """
+    if name != _STATE_ASSET["name"]:
+        raise ValueError(f"Unknown Layer 1 reference: {name!r}")
+
+    base = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    parent = base.expanduser() / "navieco" / "states"
+    parent.mkdir(parents=True, exist_ok=True)
+    destination = parent / name
+    seal = destination / ".navieco_state_reference_integrity.json"
+
+    def ready() -> bool:
+        if not seal.is_file():
+            return False
+        try:
+            saved = json.loads(seal.read_text(encoding="utf-8"))
+            if saved.get("sha256") != _STATE_ASSET["sha256"]:
+                return False
+            read_state_manifest(destination)
+            return True
+        except (OSError, ValueError, KeyError):
+            return False
+
+    if ready():
+        return destination
+    if destination.exists():
+        raise RuntimeError(f"Layer 1 cache exists but is not verified: {destination}")
+
+    lock = parent / (name + ".lock")
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+            break
+        except FileExistsError:
+            if ready():
+                return destination
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Layer 1 cache lock did not clear: {lock}")
+            time.sleep(0.5)
+
+    try:
+        if ready():
+            return destination
+        if destination.exists():
+            raise RuntimeError(f"Layer 1 cache exists but is not verified: {destination}")
+        with tempfile.TemporaryDirectory(dir=parent, prefix=f".{name}-") as work:
+            work = Path(work)
+            archive = work / "reference.zip"
+            print(f"[NAViECO] Downloading {name} (first use)", flush=True)
+            request = Request(_STATE_ASSET["url"], headers={"User-Agent": "NAViECO/1"})
+            with urlopen(request, timeout=90) as response, archive.open("wb") as output:
+                shutil.copyfileobj(response, output, length=1024 * 1024)
+            if _sha256(archive) != _STATE_ASSET["sha256"]:
+                raise ValueError("Layer 1 ZIP SHA-256 mismatch; reference rejected")
+
+            staging = work / "extract"
+            staging.mkdir()
+            _safe_extract(archive, staging)
+            read_state_manifest(staging)
+            read_parent_mapping(staging)
+            for parent_name in read_state_manifest(staging)["parents"]:
+                load_parent_state_reference(staging, parent_name)
+            (staging / seal.name).write_text(
+                json.dumps({"name": name, "sha256": _STATE_ASSET["sha256"],
+                            "url": _STATE_ASSET["url"]}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            if destination.exists():
+                raise RuntimeError(f"Refusing to overwrite cache: {destination}")
+            staging.rename(destination)
+        return destination
+    finally:
+        lock.unlink(missing_ok=True)

@@ -23,6 +23,7 @@ from .state_preprocessing import (
 from .state_recovery import _fixed_w_kl, _posneg_features_by_cells, _retained_state_scores
 from .state_reference import (
     align_query_genes,
+    get_state_reference,
     load_parent_state_reference,
     read_parent_mapping,
     read_state_manifest,
@@ -41,13 +42,17 @@ def _resolve_state_reference(reference: str | Path) -> Path:
         return path
     if str(reference) == "NAViECO_states_v1":
         configured = os.environ.get("NAVIECO_STATES_REFERENCE", "")
-        if configured and Path(configured).expanduser().is_dir():
+        if configured:
             path = Path(configured).expanduser()
-            if path.name == "NAViECO_states_v1":
+            if path.is_dir() and path.name == "NAViECO_states_v1":
                 return path
+            raise FileNotFoundError(
+                f"NAVIECO_STATES_REFERENCE does not point to NAViECO_states_v1: {path}"
+            )
+        return get_state_reference("NAViECO_states_v1")
     raise FileNotFoundError(
-        "State reference not found. Pass its directory path or set "
-        "NAVIECO_STATES_REFERENCE to the NAViECO_states_v1 directory."
+        "State reference not found. Pass its directory path or use "
+        "the published NAViECO_states_v1 reference."
     )
 
 
